@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "lQ3S8GylI-Ab1QzQbL2Ul"
+uri = "file://artifacts/apids/README.md"
+type = "text"
+title = "AuroraSOC README"
