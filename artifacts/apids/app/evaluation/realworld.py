@@ -178,6 +178,93 @@ def save_uploaded_csv(content: bytes) -> Tuple[bool, str]:
         return False, f"Parse error: {e}"
 
 
+def save_uploaded_json(content: bytes) -> Tuple[bool, str]:
+    """
+    Validate and save JSON dataset to UPLOADED_PATH (converted to CSV format).
+
+    Supports two JSON schemas:
+      1. Array of objects with prompt/label fields:
+         [{"prompt": "...", "label": 1, "category": "..."}, ...]
+      2. HuggingFace-style with "data" / "train" / "test" top-level key:
+         {"data": [...]} or {"train": [...]}
+
+    Label values accepted:
+      - 1 / 0  (int)
+      - "malicious" / "benign"  (str)
+      - "injection" / "safe"    (str)
+      - true / false            (bool)
+    """
+    os.makedirs(DATA_DIR, exist_ok=True)
+    try:
+        decoded = content.decode("utf-8", errors="replace")
+        raw = json.loads(decoded)
+    except Exception as e:
+        return False, f"JSON parse error: {e}"
+
+    # Normalise to list of dicts
+    if isinstance(raw, list):
+        rows = raw
+    elif isinstance(raw, dict):
+        for key in ("data", "train", "test", "examples", "samples", "records"):
+            if key in raw and isinstance(raw[key], list):
+                rows = raw[key]
+                break
+        else:
+            return False, "JSON must be an array or a dict with a 'data'/'train'/'test' key."
+    else:
+        return False, "Unsupported JSON structure."
+
+    if len(rows) < 5:
+        return False, "Dataset too small — need at least 5 entries."
+
+    PROMPT_KEYS = ("prompt", "text", "content", "input", "sentence", "query", "question")
+    LABEL_KEYS  = ("label", "class", "is_injection", "malicious", "is_malicious",
+                   "attack", "injected", "target")
+    CAT_KEYS    = ("category", "type", "attack_type", "class_name", "tag")
+
+    def _normalize_label(val) -> int:
+        if isinstance(val, bool):
+            return 1 if val else 0
+        if isinstance(val, (int, float)):
+            return 1 if val else 0
+        s = str(val).strip().lower()
+        if s in ("1", "malicious", "injection", "attack", "true", "yes", "injected"):
+            return 1
+        return 0
+
+    normalised = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        prompt_val = next((r[k] for k in PROMPT_KEYS if k in r), None)
+        label_val  = next((r[k] for k in LABEL_KEYS  if k in r), None)
+        cat_val    = next((r[k] for k in CAT_KEYS    if k in r), "unknown")
+        if prompt_val is None or label_val is None:
+            continue
+        normalised.append({
+            "prompt":   str(prompt_val)[:2000],
+            "label":    _normalize_label(label_val),
+            "category": str(cat_val),
+        })
+
+    if len(normalised) < 5:
+        return (
+            False,
+            "Could not extract prompt/label columns. "
+            "Expected keys: prompt/text/content + label/class/is_injection."
+        )
+
+    # Write as CSV
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=["prompt", "label", "category"])
+    w.writeheader()
+    w.writerows(normalised)
+    with open(UPLOADED_PATH, "w", newline="", encoding="utf-8") as f:
+        f.write(buf.getvalue())
+
+    return True, f"Converted and saved {len(normalised)} records from JSON."
+
+
 def save_sample_dataset() -> str:
     """Write the built-in curated sample dataset to disk and return a message."""
     os.makedirs(DATA_DIR, exist_ok=True)
