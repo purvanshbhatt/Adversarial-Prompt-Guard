@@ -25,6 +25,9 @@ from .adversarial.rl_loop import run_adaptive_loop, load_latest_results, load_hi
 from .adversarial.strategies import ALL_STRATEGIES
 from .adversarial.mutation import MUTATION_ORDER
 from .agents.orchestrator import SOCOrchestrator
+from .mitigation.policy_engine import decide as policy_decide, policy_description, POLICIES
+from .mitigation.sanitizer import sanitize as sanitize_prompt, diff_highlight_html, sanitized_highlight_html
+from .mitigation.rewriter import rewrite as rewrite_prompt, is_llm_available
 
 app = FastAPI(
     title="AuroraSOC — Multi-Agent AI Security Platform",
@@ -102,6 +105,11 @@ class AdaptiveLoopRequest(BaseModel):
 class MutateRequest(BaseModel):
     prompt: str
     mutations: List[str]
+
+class MitigateRequest(BaseModel):
+    prompt: str
+    policy: Optional[str] = "standard"
+    use_llm_rewrite: Optional[bool] = False
 
 
 # ── Core detection helpers ──────────────────────────────────────────────────
@@ -196,6 +204,64 @@ def analyze_prompt(request: PromptRequest):
         "obf_score":     result["obfuscation_score"],
     })
     return result
+
+
+@app.post("/api/mitigate")
+def mitigate_prompt(request: MitigateRequest):
+    """
+    Full detection + response pipeline.
+    Returns original prompt, sanitized/rewritten version, and action taken.
+    """
+    detection = _run_analysis(request.prompt)
+    risk_score = detection["risk_score"]
+    policy     = request.policy or "standard"
+
+    action, severity = policy_decide(risk_score, policy, request.use_llm_rewrite or False)
+
+    llm_used = False
+    if action == "BLOCK":
+        sanitized = "[PROMPT BLOCKED — High-risk injection detected. Prompt was not forwarded to the model.]"
+        removed   = [{"segment": t, "category": "blocked", "reason": "Prompt blocked by policy"} for t in detection.get("suspicious_tokens", [])]
+    elif action == "REWRITE":
+        sanitized, removed = rewrite_prompt(request.prompt, detection)
+        llm_used = is_llm_available()
+        if not llm_used:
+            action = "SANITIZE"
+    elif action == "SANITIZE":
+        sanitized, removed = sanitize_prompt(request.prompt, detection)
+    else:
+        sanitized = request.prompt
+        removed   = []
+
+    char_reduction = max(0, len(request.prompt) - len(sanitized))
+    pct_reduction  = round(char_reduction / max(len(request.prompt), 1) * 100, 1)
+
+    return {
+        "original":          request.prompt,
+        "sanitized":         sanitized,
+        "action":            action,
+        "policy_used":       policy,
+        "risk_score":        risk_score,
+        "severity":          severity,
+        "attack_types":      detection["attack_types"],
+        "explanation":       detection["explanation"],
+        "tokens_removed":    removed,
+        "segments_count":    len(removed),
+        "char_reduction":    char_reduction,
+        "pct_reduction":     pct_reduction,
+        "llm_rewrite_used":  llm_used,
+        "ml_score":          detection["ml_score"],
+        "rule_score":        detection["rule_based_score"],
+        "semantic_score":    detection["semantic_score"],
+    }
+
+
+@app.get("/api/mitigate/policies")
+def get_policies():
+    return {
+        "policies": {name: policy_description(name) for name in POLICIES},
+        "llm_rewrite_available": is_llm_available(),
+    }
 
 
 @app.post("/api/train_model")
