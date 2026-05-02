@@ -133,6 +133,7 @@ with st.sidebar:
         "🧪 Test Cases",
         "🔓 Obfuscation Lab",
         "💬 Multi-Turn Analysis",
+        "🌐 Real-World Eval",
         "🤖 Train Model",
         "📋 Logs",
         "📈 Benchmark & Metrics",
@@ -555,6 +556,384 @@ elif page == "💬 Multi-Turn Analysis":
         if st.button(f"Load: {name}", key=name):
             st.session_state["conv_example"] = text
             st.rerun()
+
+
+# ════════════════════════════════════════════════════════════════════
+# PAGE: Real-World Evaluation
+# ════════════════════════════════════════════════════════════════════
+elif page == "🌐 Real-World Eval":
+    st.markdown("# 🌐 Real-World Evaluation")
+    st.markdown(
+        "Upload an external dataset (CSV) or use the built-in curated jailbreak corpus to "
+        "benchmark APIDS on data it was **not trained on**, and measure how well it generalises."
+    )
+
+    tab_upload, tab_run, tab_gap, tab_export = st.tabs([
+        "📂 Dataset",
+        "🚀 Run Benchmark",
+        "📉 Generalization Gap",
+        "📥 Export",
+    ])
+
+    # ── Tab 1: Upload / Load ─────────────────────────────────────────
+    with tab_upload:
+        st.markdown("### Option A — Upload Your Own CSV")
+        st.markdown(
+            "Required columns: **`prompt`** (or `text`/`content`) + **`label`** (0/1 or `benign`/`malicious`). "
+            "Optional: `category` column."
+        )
+
+        uploaded_file = st.file_uploader(
+            "Drop a CSV file here",
+            type=["csv"],
+            label_visibility="collapsed",
+        )
+        if uploaded_file is not None:
+            with st.spinner("Uploading and validating…"):
+                try:
+                    r = requests.post(
+                        f"{API_BASE}/upload_dataset",
+                        files={"file": (uploaded_file.name, uploaded_file.getvalue(), "text/csv")},
+                        timeout=30,
+                    )
+                    result = r.json()
+                    if r.status_code == 200:
+                        st.success(f"✅ {result['message']}")
+                        ds = result.get("dataset", {})
+                        c1,c2,c3 = st.columns(3)
+                        c1.metric("Total Prompts", ds.get("total", 0))
+                        c2.metric("Malicious",     ds.get("malicious", 0))
+                        c3.metric("Benign",        ds.get("benign", 0))
+                    else:
+                        st.error(f"Upload failed: {result.get('detail', r.text)}")
+                except Exception as e:
+                    st.error(f"Upload error: {e}")
+
+        st.divider()
+        st.markdown("### Option B — Use Built-In Sample Dataset")
+        st.markdown(
+            "60 curated prompts drawn from publicly documented jailbreak taxonomies: "
+            "DAN/STAN/DUDE variants, instruction override, data exfiltration, indirect injection, and benign queries."
+        )
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("📦 Load Sample Dataset (60 prompts)", use_container_width=True):
+                with st.spinner("Loading…"):
+                    r = api_post("/upload_dataset/sample")
+                st.success(r.get("message", "Sample loaded!"))
+                st.rerun()
+
+        with col_b:
+            if st.button("🗑️ Remove Dataset", use_container_width=True):
+                try:
+                    requests.delete(f"{API_BASE}/upload_dataset", timeout=10)
+                    st.success("Dataset removed.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+
+        st.divider()
+        st.markdown("### Current Dataset Status")
+        info = api_get("/upload_dataset/info")
+        if info.get("available"):
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Total",     info.get("total", 0))
+            c2.metric("Malicious", info.get("malicious", 0))
+            c3.metric("Benign",    info.get("benign", 0))
+            c4.metric("Balance",   f"{info.get('label_balance', 0)*100:.0f}% attack")
+
+            if info.get("category_distribution"):
+                st.markdown("**Category Distribution**")
+                cats = info["category_distribution"]
+                cat_df = pd.DataFrame([
+                    {"Category": k.replace("_"," ").title(), "Count": v}
+                    for k, v in cats.items()
+                ])
+                fig = px.bar(cat_df, x="Category", y="Count",
+                             color="Count", color_continuous_scale="Blues",
+                             template="plotly_dark")
+                fig.update_layout(paper_bgcolor="rgba(0,0,0,0)",
+                                  plot_bgcolor="rgba(0,0,0,0)",
+                                  coloraxis_showscale=False,
+                                  margin=dict(l=10,r=10,t=10,b=10), height=220)
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No dataset loaded yet. Upload a CSV or click **Load Sample Dataset**.")
+
+    # ── Tab 2: Run Benchmark ─────────────────────────────────────────
+    with tab_run:
+        st.markdown("### Run Comparative Benchmark")
+        st.markdown(
+            "Runs APIDS on both the uploaded real-world dataset and a fresh synthetic dataset, "
+            "then computes Accuracy / Precision / Recall / F1 / ISR / PIVS for each."
+        )
+
+        info_check = api_get("/upload_dataset/info")
+
+        with st.form("rw_bench_form"):
+            c1, c2 = st.columns(2)
+            syn_size    = c1.slider("Synthetic dataset size", 100, 1000, 400, 50)
+            use_sample  = c2.checkbox(
+                "Auto-load sample dataset if none uploaded",
+                value=not info_check.get("available", False),
+            )
+            run_rw = st.form_submit_button("🚀 Run Real-World Benchmark (~20s)", use_container_width=True)
+
+        if run_rw:
+            if not info_check.get("available") and not use_sample:
+                st.warning("No dataset loaded. Enable 'Auto-load sample dataset' or upload one in the Dataset tab.")
+            else:
+                with st.spinner("Running benchmark on both datasets… (~20s)"):
+                    result = api_post(
+                        "/realworld_benchmark",
+                        {"use_sample": use_sample, "dataset_size": syn_size},
+                        timeout=180,
+                    )
+
+                if "error" in result:
+                    st.error(result.get("detail") or result["error"])
+                else:
+                    st.success("✅ Benchmark complete!")
+                    st.session_state["rw_comparison"] = result
+                    st.rerun()
+
+        # Show results if available
+        comp = st.session_state.get("rw_comparison") or {}
+        if not comp:
+            # Try loading from API on refresh
+            try:
+                test_r = requests.get(f"{API_BASE}/export_comparison", timeout=5)
+                if test_r.status_code == 200:
+                    st.info("Previous benchmark results available. Check the Generalization Gap and Export tabs.")
+            except Exception:
+                pass
+
+        if comp:
+            syn = comp.get("synthetic", {})
+            rw  = comp.get("real_world", {})
+            syn_m = syn.get("metrics", {})
+            rw_m  = rw.get("metrics", {})
+
+            st.divider()
+            st.markdown("### Side-by-Side Performance Comparison")
+
+            metrics = ["accuracy", "precision", "recall", "f1"]
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                name="Synthetic",
+                x=[m.title() for m in metrics],
+                y=[syn_m.get(m, 0) for m in metrics],
+                marker_color="#58a6ff",
+                text=[f"{syn_m.get(m,0)*100:.1f}%" for m in metrics],
+                textposition="outside",
+            ))
+            fig.add_trace(go.Bar(
+                name="Real-World",
+                x=[m.title() for m in metrics],
+                y=[rw_m.get(m, 0) for m in metrics],
+                marker_color="#3fb950",
+                text=[f"{rw_m.get(m,0)*100:.1f}%" for m in metrics],
+                textposition="outside",
+            ))
+            fig.update_layout(
+                barmode="group",
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font={"color":"#e6edf3"},
+                yaxis={"range":[0,1.15], "tickformat":".0%", "gridcolor":"#21262d"},
+                legend={"font":{"color":"#e6edf3"}},
+                height=320, margin=dict(l=10,r=10,t=10,b=10),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Metrics table
+            table_rows = []
+            for m in metrics:
+                s_val = syn_m.get(m, 0)
+                r_val = rw_m.get(m, 0)
+                delta = s_val - r_val
+                sym = "✅" if abs(delta) <= 0.05 else ("⚠️" if abs(delta) <= 0.15 else "❌")
+                table_rows.append({
+                    "Metric":      m.title(),
+                    "Synthetic":   f"{s_val*100:.1f}%",
+                    "Real-World":  f"{r_val*100:.1f}%",
+                    "Δ":           f"{delta*100:+.1f}%",
+                    "Verdict":     sym,
+                })
+            st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+
+            # ISR + PIVS side by side
+            st.divider()
+            st.markdown("### Research Metrics (ISR + PIVS)")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**Synthetic**")
+                syn_isr  = syn.get("isr", {})
+                syn_pivs = syn.get("pivs", {})
+                st.metric("ISR Protected",  f"{(syn_isr.get('isr_protected') or 0)*100:.1f}%")
+                st.metric("ISR Reduction",  f"{(syn_isr.get('isr_reduction') or 0)*100:.1f}%")
+                st.metric("PIVS",           f"{syn_pivs.get('pivs', 0):.1f}/100")
+                st.metric("PIVS Tier",      syn_pivs.get("tier", "—"))
+            with c2:
+                st.markdown("**Real-World**")
+                rw_isr  = rw.get("isr", {})
+                rw_pivs = rw.get("pivs", {})
+                st.metric("ISR Protected",  f"{(rw_isr.get('isr_protected') or 0)*100:.1f}%")
+                st.metric("ISR Reduction",  f"{(rw_isr.get('isr_reduction') or 0)*100:.1f}%")
+                st.metric("PIVS",           f"{rw_pivs.get('pivs', 0):.1f}/100")
+                st.metric("PIVS Tier",      rw_pivs.get("tier", "—"))
+
+    # ── Tab 3: Generalization Gap ────────────────────────────────────
+    with tab_gap:
+        comp = st.session_state.get("rw_comparison") or {}
+        if not comp:
+            st.info("Run the benchmark first in the **Run Benchmark** tab.")
+        else:
+            gap = comp.get("generalization_gap", {})
+            per_metric = gap.get("per_metric", {})
+            f1_gap = gap.get("f1_gap", 0)
+            gen_score = gap.get("generalization_score", 1.0)
+
+            st.markdown("### Generalization Gap Analysis")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("ΔF1 (Gap)",              f"{f1_gap*100:.1f}%",
+                      help="Difference in F1 between synthetic and real-world. Lower = better generalization.")
+            c2.metric("Generalization Score",    f"{gen_score*100:.1f}%",
+                      help="1 − ΔF1. Higher = better.")
+            delta_dir = per_metric.get("f1", {}).get("direction", "—")
+            c3.metric("Assessment",              delta_dir.title())
+
+            st.divider()
+            st.markdown("### Per-Metric Gap")
+            metrics = ["accuracy","precision","recall","f1"]
+            gap_vals  = [abs(per_metric.get(m,{}).get("delta",0)) for m in metrics]
+            bar_colors = ["#3fb950" if v <= 0.05 else "#d29922" if v <= 0.15 else "#f85149" for v in gap_vals]
+
+            fig = go.Figure(go.Bar(
+                x=[m.title() for m in metrics],
+                y=gap_vals,
+                marker_color=bar_colors,
+                text=[f"{v*100:.1f}%" for v in gap_vals],
+                textposition="outside",
+            ))
+            fig.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font={"color":"#e6edf3"},
+                yaxis={"range":[0, max(gap_vals)*1.3 + 0.05], "tickformat":".0%", "gridcolor":"#21262d"},
+                title={"text":"Generalization Gap per Metric (lower = better generalization)","font":{"color":"#8b949e","size":13}},
+                height=280, margin=dict(l=10,r=10,t=40,b=10),
+            )
+            fig.add_hline(y=0.05, line_dash="dash", line_color="#3fb950",
+                          annotation_text="5% threshold (acceptable)", annotation_font_color="#3fb950")
+            fig.add_hline(y=0.15, line_dash="dash", line_color="#d29922",
+                          annotation_text="15% threshold (concerning)", annotation_font_color="#d29922")
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.markdown("### Diagnosis")
+            diagnosis = gap.get("diagnosis", "")
+            if f1_gap <= 0.05:
+                st.success(f"✅ {diagnosis}")
+            elif f1_gap <= 0.15:
+                st.warning(f"⚠️ {diagnosis}")
+            else:
+                st.error(f"❌ {diagnosis}")
+
+            factors = gap.get("contributing_factors", [])
+            if factors:
+                st.markdown("### Contributing Factors")
+                for f in factors:
+                    st.markdown(f"- {f}")
+
+            st.divider()
+            st.markdown("### Academic Context")
+            st.markdown(
+                "A generalization gap is expected when the ML classifier is trained exclusively on "
+                "synthetic data and tested on real-world prompts. The key insight:\n\n"
+                "- **Rule-based and semantic layers** are largely distribution-agnostic — they match "
+                "linguistic patterns, not learned n-grams\n"
+                "- **The ML layer** learns vocabulary from synthetic phrasing and may fail on novel wording\n"
+                "- **The ensemble** inherits the robustness of the rule-based layer, limiting total gap\n\n"
+                "This gap analysis is a novel research contribution: most prior work benchmarks only on "
+                "synthetic data and does not measure real-world transfer performance."
+            )
+
+    # ── Tab 4: Export ─────────────────────────────────────────────────
+    with tab_export:
+        st.markdown("### Export Comparison Results")
+        comp = st.session_state.get("rw_comparison") or {}
+
+        if not comp:
+            st.info("Run the benchmark first to generate exportable results.")
+        else:
+            st.markdown(
+                "The export includes:\n"
+                "- **Summary comparison table** (Synthetic vs Real-World, all metrics)\n"
+                "- **Research metrics** (ISR protected/reduction, PIVS, tier)\n"
+                "- **Generalization gap** (delta, diagnosis, contributing factors)\n"
+                "- **Per-prompt predictions** (true label, predicted, risk scores)"
+            )
+            st.divider()
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+                if st.button("📥 Download Comparison CSV", use_container_width=True):
+                    try:
+                        r = requests.get(f"{API_BASE}/export_comparison", timeout=60)
+                        if r.status_code == 200:
+                            st.download_button(
+                                label="💾 Save apids_comparison.csv",
+                                data=r.content,
+                                file_name="apids_comparison.csv",
+                                mime="text/csv",
+                                use_container_width=True,
+                            )
+                        else:
+                            st.error(f"Export failed: {r.text[:200]}")
+                    except Exception as e:
+                        st.error(str(e))
+
+            with c2:
+                st.download_button(
+                    "📥 Download Comparison JSON",
+                    data=json.dumps(comp, indent=2),
+                    file_name="apids_comparison.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
+
+            # Quick inline summary table
+            st.divider()
+            st.markdown("### Quick Summary Table")
+            syn  = comp.get("synthetic", {})
+            rw   = comp.get("real_world", {})
+            gap  = comp.get("generalization_gap", {})
+            per  = gap.get("per_metric", {})
+
+            syn_isr  = syn.get("isr", {})
+            rw_isr   = rw.get("real_world", rw).get("isr", rw.get("isr", {}))
+            syn_pivs = syn.get("pivs", {})
+            rw_pivs  = rw.get("pivs", {})
+
+            rows = []
+            for m in ("accuracy","precision","recall","f1"):
+                pg = per.get(m, {})
+                rows.append({
+                    "Metric":     m.title(),
+                    "Synthetic":  f"{(pg.get('synthetic') or 0)*100:.1f}%",
+                    "Real-World": f"{(pg.get('real_world') or 0)*100:.1f}%",
+                    "Δ":          f"{(pg.get('delta') or 0)*100:+.1f}%",
+                    "Status":     pg.get("direction","—").title(),
+                })
+            rows.append({"Metric":"ISR Reduction",
+                         "Synthetic": f"{(syn_isr.get('isr_reduction') or 0)*100:.1f}%",
+                         "Real-World": f"{(rw_isr.get('isr_reduction') or 0)*100:.1f}%",
+                         "Δ":"—", "Status":"—"})
+            rows.append({"Metric":"PIVS",
+                         "Synthetic": f"{syn_pivs.get('pivs',0):.1f}/100",
+                         "Real-World": f"{rw_pivs.get('pivs',0):.1f}/100",
+                         "Δ":"—", "Status":rw_pivs.get('tier','—')})
+
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 # ════════════════════════════════════════════════════════════════════

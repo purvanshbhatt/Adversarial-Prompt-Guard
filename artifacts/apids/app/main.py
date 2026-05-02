@@ -1,9 +1,10 @@
 import os
 import json
+import io
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 
@@ -23,7 +24,7 @@ from .report import generate_report
 app = FastAPI(
     title="Adversarial Prompt Injection Detection System (APIDS)",
     description="Production-grade API for detecting adversarial prompt injection attacks in LLM pipelines.",
-    version="1.0.0",
+    version="1.1.0",
 )
 
 app.add_middleware(
@@ -39,17 +40,23 @@ semantic_detector = SemanticSimilarityDetector()
 trainer = ModelTrainer()
 logger = PromptLogger()
 
+DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data"))
+
 
 # ── Pydantic schemas ────────────────────────────────────────────────────────
 
 class ConversationMessage(BaseModel):
-    role: str       # "user" or "assistant"
+    role: str
     content: str
 
 class ConversationRequest(BaseModel):
     messages: List[ConversationMessage]
 
 class BenchmarkRequest(BaseModel):
+    dataset_size: Optional[int] = 400
+
+class RealWorldBenchmarkRequest(BaseModel):
+    use_sample: Optional[bool] = False
     dataset_size: Optional[int] = 400
 
 class ISRRequest(BaseModel):
@@ -60,38 +67,27 @@ class PIVSRequest(BaseModel):
     obfuscated_results: Optional[List[Dict[str, Any]]] = None
 
 
-# ── Core endpoints ──────────────────────────────────────────────────────────
+# ── Core detection helpers ──────────────────────────────────────────────────
 
-@app.get("/api/health")
-def health():
-    return {
-        "status": "ok",
-        "ml_trained": ml_classifier.is_trained(),
-        "semantic_loaded": semantic_detector.is_initialized(),
-    }
-
-
-@app.post("/api/analyze_prompt")
-def analyze_prompt(request: PromptRequest):
-    text = request.prompt
-
-    rule_result = rule_detector.detect(text)
-    ml_result = ml_classifier.predict(text)
+def _run_analysis(text: str) -> Dict:
+    """Shared detection pipeline used by multiple endpoints."""
+    rule_result     = rule_detector.detect(text)
+    ml_result       = ml_classifier.predict(text)
     semantic_result = semantic_detector.compute_similarity(text)
     _, suspicious_tokens = detect_hidden_instructions(text)
-    obf_result = detect_obfuscation(text)
+    obf_result      = detect_obfuscation(text)
 
     rule_score = rule_result["score"]
-    ml_score = ml_result["score"]
-    sem_score = semantic_result["score"]
-    obf_score = obf_result["obfuscation_score"]
+    ml_score   = ml_result["score"]
+    sem_score  = semantic_result["score"]
+    obf_score  = obf_result["obfuscation_score"]
 
     if ml_result["trained"]:
         risk_score = rule_score * 0.32 + ml_score * 0.38 + sem_score * 0.20 + obf_score * 0.10
-        threshold = 35.0
+        threshold  = 35.0
     else:
         risk_score = rule_score * 0.60 + sem_score * 0.30 + obf_score * 0.10
-        threshold = 28.0
+        threshold  = 28.0
 
     risk_score = round(min(risk_score, 100.0), 1)
     is_malicious = risk_score >= threshold
@@ -113,42 +109,55 @@ def analyze_prompt(request: PromptRequest):
     if not explanation_parts:
         explanation_parts.append("No specific attack indicators detected. Prompt appears benign.")
 
-    explanation = " ".join(explanation_parts)
     all_tokens = list(dict.fromkeys(rule_result["suspicious_tokens"] + suspicious_tokens))
 
-    result = {
-        "prompt": text[:500],
-        "risk_score": risk_score,
-        "is_malicious": is_malicious,
-        "attack_types": rule_result["attack_types"],
-        "rule_based_flags": rule_result["flags"],
-        "rule_based_score": rule_score,
-        "ml_prediction": ml_result["prediction"],
-        "ml_confidence": ml_result["confidence"],
-        "ml_score": ml_score,
+    return {
+        "prompt":                    text[:500],
+        "risk_score":                risk_score,
+        "is_malicious":              is_malicious,
+        "attack_types":              rule_result["attack_types"],
+        "rule_based_flags":          rule_result["flags"],
+        "rule_based_score":          rule_score,
+        "ml_prediction":             ml_result["prediction"],
+        "ml_confidence":             ml_result["confidence"],
+        "ml_score":                  ml_score,
         "semantic_similarity_score": semantic_result["max_similarity"],
-        "semantic_score": sem_score,
-        "semantic_method": semantic_result["method"],
-        "most_similar_pattern": semantic_result["most_similar_pattern"],
-        "obfuscation_score": obf_score,
-        "obfuscation_techniques": obf_result["techniques_found"],
-        "explanation": explanation,
-        "suspicious_tokens": all_tokens[:10],
+        "semantic_score":            sem_score,
+        "semantic_method":           semantic_result["method"],
+        "most_similar_pattern":      semantic_result["most_similar_pattern"],
+        "obfuscation_score":         obf_score,
+        "obfuscation_techniques":    obf_result["techniques_found"],
+        "explanation":               " ".join(explanation_parts),
+        "suspicious_tokens":         all_tokens[:10],
     }
 
-    logger.log({
-        "prompt": text[:500],
-        "risk_score": risk_score,
-        "is_malicious": is_malicious,
-        "attack_types": rule_result["attack_types"],
-        "explanation": explanation,
-        "ml_prediction": ml_result["prediction"],
-        "rule_score": rule_score,
-        "ml_score": ml_score,
-        "sem_score": sem_score,
-        "obf_score": obf_score,
-    })
 
+# ── Core endpoints ──────────────────────────────────────────────────────────
+
+@app.get("/api/health")
+def health():
+    return {
+        "status": "ok",
+        "ml_trained": ml_classifier.is_trained(),
+        "semantic_loaded": semantic_detector.is_initialized(),
+    }
+
+
+@app.post("/api/analyze_prompt")
+def analyze_prompt(request: PromptRequest):
+    result = _run_analysis(request.prompt)
+    logger.log({
+        "prompt":        result["prompt"],
+        "risk_score":    result["risk_score"],
+        "is_malicious":  result["is_malicious"],
+        "attack_types":  result["attack_types"],
+        "explanation":   result["explanation"],
+        "ml_prediction": result["ml_prediction"],
+        "rule_score":    result["rule_based_score"],
+        "ml_score":      result["ml_score"],
+        "sem_score":     result["semantic_score"],
+        "obf_score":     result["obfuscation_score"],
+    })
     return result
 
 
@@ -165,7 +174,7 @@ def get_logs(
     offset: int = Query(0, ge=0),
 ):
     entries = logger.get_logs(limit=limit, offset=offset)
-    stats = logger.get_stats()
+    stats   = logger.get_stats()
     return {"logs": entries, "stats": stats}
 
 
@@ -182,9 +191,7 @@ def clear_logs():
 
 @app.get("/api/evaluation")
 def get_evaluation():
-    eval_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../data/evaluation_results.json")
-    )
+    eval_path = os.path.join(DATA_DIR, "evaluation_results.json")
     if os.path.exists(eval_path):
         with open(eval_path) as f:
             return json.load(f)
@@ -220,13 +227,12 @@ def get_test_cases():
 
 @app.get("/api/dataset_info")
 def dataset_info():
-    data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data"))
-    csv_path = os.path.join(data_dir, "prompt_injection_dataset.csv")
-    json_path = os.path.join(data_dir, "prompt_injection_dataset.json")
+    csv_path  = os.path.join(DATA_DIR, "prompt_injection_dataset.csv")
+    json_path = os.path.join(DATA_DIR, "prompt_injection_dataset.json")
     return {
-        "csv_available": os.path.exists(csv_path),
+        "csv_available":  os.path.exists(csv_path),
         "json_available": os.path.exists(json_path),
-        "csv_path": csv_path if os.path.exists(csv_path) else None,
+        "csv_path":  csv_path  if os.path.exists(csv_path)  else None,
         "json_path": json_path if os.path.exists(json_path) else None,
     }
 
@@ -235,8 +241,7 @@ def dataset_info():
 
 @app.post("/api/analyze_obfuscation")
 def analyze_obfuscation(request: PromptRequest):
-    """Detect obfuscation techniques in a prompt."""
-    obf = detect_obfuscation(request.prompt)
+    obf  = detect_obfuscation(request.prompt)
     rule = rule_detector.detect(request.prompt)
     return {
         "prompt": request.prompt[:500],
@@ -248,34 +253,33 @@ def analyze_obfuscation(request: PromptRequest):
 
 @app.post("/api/generate_obfuscated")
 def generate_obfuscated(request: PromptRequest):
-    """Generate obfuscated variants of a prompt for robustness testing."""
     variants = generate_obfuscated_variants(request.prompt)
-    results = []
+    results  = []
     for v in variants:
-        obf = detect_obfuscation(v["variant"])
+        obf  = detect_obfuscation(v["variant"])
         rule = rule_detector.detect(v["variant"])
-        ml = ml_classifier.predict(v["variant"])
-        sem = semantic_detector.compute_similarity(v["variant"])
+        ml   = ml_classifier.predict(v["variant"])
+        sem  = semantic_detector.compute_similarity(v["variant"])
         if ml["trained"]:
             score = rule["score"] * 0.32 + ml["score"] * 0.38 + sem["score"] * 0.20 + obf["obfuscation_score"] * 0.10
         else:
             score = rule["score"] * 0.50 + sem["score"] * 0.35 + obf["obfuscation_score"] * 0.15
         score = round(min(score, 100), 1)
         results.append({
-            "technique": v["technique"],
-            "variant": v["variant"][:200],
-            "risk_score": score,
-            "detected": score >= 35,
+            "technique":        v["technique"],
+            "variant":          v["variant"][:200],
+            "risk_score":       score,
+            "detected":         score >= 35,
             "obfuscation_score": obf["obfuscation_score"],
-            "rule_score": rule["score"],
+            "rule_score":       rule["score"],
         })
     detected_count = sum(1 for r in results if r["detected"])
     return {
         "original": request.prompt[:200],
         "variants": results,
         "detection_summary": {
-            "detected": detected_count,
-            "total": len(results),
+            "detected":    detected_count,
+            "total":       len(results),
             "bypass_rate": round((len(results) - detected_count) / len(results), 4),
         },
     }
@@ -285,17 +289,15 @@ def generate_obfuscated(request: PromptRequest):
 
 @app.post("/api/analyze_conversation")
 def analyze_conv(request: ConversationRequest):
-    """Analyze a multi-turn conversation for context carry-over attacks."""
     messages = [m.dict() for m in request.messages]
-    result = analyze_conversation(messages)
+    result   = analyze_conversation(messages)
 
-    # Also run single-prompt analysis on the last user message
     user_msgs = [m for m in messages if m.get("role") == "user"]
     if user_msgs:
-        last = user_msgs[-1]["content"]
-        prompt_result = analyze_prompt(PromptRequest(prompt=last))
+        last         = user_msgs[-1]["content"]
+        prompt_result = _run_analysis(last)
         result["last_turn_analysis"] = {
-            "risk_score": prompt_result["risk_score"],
+            "risk_score":  prompt_result["risk_score"],
             "is_malicious": prompt_result["is_malicious"],
             "explanation": prompt_result["explanation"],
         }
@@ -307,64 +309,200 @@ def analyze_conv(request: ConversationRequest):
 
 @app.post("/api/metrics/isr")
 def compute_isr_endpoint(request: ISRRequest):
-    """Compute Injection Success Rate from a list of detection results."""
     return compute_isr(request.results)
 
 
 @app.post("/api/metrics/pivs")
 def compute_pivs_endpoint(request: PIVSRequest):
-    """Compute Prompt Injection Vulnerability Score."""
     return compute_pivs(request.isr_data, request.obfuscated_results)
 
 
 @app.post("/api/benchmark")
 def run_benchmark(request: BenchmarkRequest):
-    """
-    Run the full 5-layer benchmark and return comparative metrics,
-    ISR, and PIVS. May take 10-20 seconds.
-    """
     from .benchmark import run_benchmark as _bench
     return _bench(dataset_size=request.dataset_size)
+
+
+# ── Real-world evaluation endpoints ─────────────────────────────────────────
+
+@app.post("/api/upload_dataset")
+async def upload_dataset(file: UploadFile = File(...)):
+    """
+    Upload a CSV with at least two columns:
+      - prompt / text / content / input
+      - label / class / is_injection / malicious  (0/1 or benign/malicious)
+    Optional: category / type / attack_type column.
+    """
+    from .evaluation.realworld import save_uploaded_csv
+
+    if not file.filename.endswith((".csv", ".tsv")):
+        raise HTTPException(status_code=400, detail="Only CSV/TSV files are supported.")
+
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:  # 10 MB cap
+        raise HTTPException(status_code=413, detail="File too large (max 10 MB).")
+
+    ok, message = save_uploaded_csv(content)
+    if not ok:
+        raise HTTPException(status_code=422, detail=message)
+
+    from .evaluation.realworld import dataset_info as _info
+    return {"message": message, "dataset": _info()}
+
+
+@app.post("/api/upload_dataset/sample")
+def load_sample_dataset():
+    """Load the built-in curated sample dataset (60 real-world-style prompts)."""
+    from .evaluation.realworld import save_sample_dataset, dataset_info as _info
+    message = save_sample_dataset()
+    return {"message": message, "dataset": _info()}
+
+
+@app.get("/api/upload_dataset/info")
+def uploaded_dataset_info():
+    """Return metadata about the currently loaded real-world dataset."""
+    from .evaluation.realworld import dataset_info as _info
+    return _info()
+
+
+@app.delete("/api/upload_dataset")
+def delete_uploaded_dataset():
+    from .evaluation.realworld import UPLOADED_PATH
+    if os.path.exists(UPLOADED_PATH):
+        os.remove(UPLOADED_PATH)
+        return {"message": "Uploaded dataset removed."}
+    return {"message": "No uploaded dataset found."}
+
+
+@app.post("/api/realworld_benchmark")
+def realworld_benchmark(request: RealWorldBenchmarkRequest):
+    """
+    Run APIDS on the uploaded real-world dataset, run the synthetic benchmark
+    in parallel, then return a side-by-side comparison + generalization gap.
+    """
+    from .evaluation.realworld import (
+        run_realworld_evaluation, save_sample_dataset,
+        compute_generalization_gap, dataset_info as _info,
+    )
+    from .benchmark import run_benchmark as _bench
+
+    # Optionally load the built-in sample first
+    if request.use_sample:
+        save_sample_dataset()
+
+    info = _info()
+    if not info.get("available"):
+        raise HTTPException(
+            status_code=400,
+            detail="No real-world dataset available. Upload one via POST /api/upload_dataset "
+                   "or set use_sample=true.",
+        )
+
+    # Run both evaluations
+    rw_result  = run_realworld_evaluation()
+    syn_result = _bench(dataset_size=request.dataset_size)
+
+    if "error" in rw_result:
+        raise HTTPException(status_code=500, detail=rw_result["error"])
+
+    # Normalize synthetic metrics to the same shape as rw_result["metrics"]
+    syn_metrics = syn_result.get("layer_metrics", {}).get("ensemble", {})
+
+    gap = compute_generalization_gap(syn_metrics, rw_result["metrics"])
+
+    # Build the clean comparison payload
+    comparison = {
+        "synthetic": {
+            "dataset_size": syn_result["dataset_size"],
+            "metrics":      syn_metrics,
+            "isr":          syn_result.get("isr", {}),
+            "pivs":         syn_result.get("pivs", {}),
+        },
+        "real_world": {
+            "dataset_size": rw_result["dataset_size"],
+            "metrics":      rw_result["metrics"],
+            "isr":          rw_result["isr"],
+            "pivs":         rw_result["pivs"],
+            "ml_trained":   rw_result["ml_trained"],
+        },
+        "generalization_gap": gap,
+    }
+
+    # Persist for the report
+    comp_path = os.path.join(DATA_DIR, "comparison_results.json")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(comp_path, "w") as fh:
+        json.dump(comparison, fh, indent=2)
+
+    return comparison
+
+
+@app.get("/api/export_comparison")
+def export_comparison():
+    """
+    Export the latest comparison results as a downloadable CSV.
+    Run /api/realworld_benchmark first.
+    """
+    from .evaluation.realworld import (
+        export_comparison_csv, load_uploaded_dataset,
+        RW_RESULTS_PATH,
+    )
+
+    comp_path = os.path.join(DATA_DIR, "comparison_results.json")
+    if not os.path.exists(comp_path):
+        raise HTTPException(
+            status_code=404,
+            detail="No comparison results yet. POST to /api/realworld_benchmark first.",
+        )
+
+    with open(comp_path) as f:
+        comp = json.load(f)
+
+    # Load per-prompt detail if available
+    per_prompt = None
+    if os.path.exists(RW_RESULTS_PATH):
+        with open(RW_RESULTS_PATH) as f:
+            rw_full = json.load(f)
+
+    # Re-run to get per_prompt (cheap since it's already cached logic)
+    from .evaluation.realworld import load_uploaded_dataset
+    dataset, _ = load_uploaded_dataset()
+    if dataset:
+        from .evaluation.realworld import run_realworld_evaluation
+        full = run_realworld_evaluation(dataset)
+        per_prompt = full.get("per_prompt", [])
+
+    csv_content = export_comparison_csv(
+        synthetic_metrics=comp.get("synthetic", {}),
+        realworld_metrics=comp.get("real_world", {}),
+        gap_data=comp.get("generalization_gap", {}),
+        per_prompt=per_prompt,
+    )
+
+    return StreamingResponse(
+        io.StringIO(csv_content),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=apids_comparison.csv"},
+    )
 
 
 # ── Report endpoint ─────────────────────────────────────────────────────────
 
 @app.get("/api/report", response_class=PlainTextResponse)
 def get_report(format: str = Query("markdown", enum=["markdown"])):
-    """Generate the full research report as Markdown."""
     stats = logger.get_stats()
-    eval_data = None
-    eval_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../data/evaluation_results.json")
-    )
-    if os.path.exists(eval_path):
-        with open(eval_path) as f:
-            eval_data = json.load(f)
 
-    # Try to load latest benchmark if available
-    bench_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../data/benchmark_results.json")
-    )
-    benchmark_data = None
-    if os.path.exists(bench_path):
-        with open(bench_path) as f:
-            benchmark_data = json.load(f)
+    def _load(path):
+        if os.path.exists(path):
+            with open(path) as f:
+                return json.load(f)
+        return None
 
-    isr_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../data/isr_results.json")
-    )
-    isr_data = None
-    if os.path.exists(isr_path):
-        with open(isr_path) as f:
-            isr_data = json.load(f)
-
-    pivs_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../data/pivs_results.json")
-    )
-    pivs_data = None
-    if os.path.exists(pivs_path):
-        with open(pivs_path) as f:
-            pivs_data = json.load(f)
+    eval_data      = _load(os.path.join(DATA_DIR, "evaluation_results.json"))
+    benchmark_data = _load(os.path.join(DATA_DIR, "benchmark_results.json"))
+    isr_data       = _load(os.path.join(DATA_DIR, "isr_results.json"))
+    pivs_data      = _load(os.path.join(DATA_DIR, "pivs_results.json"))
+    comparison_data = _load(os.path.join(DATA_DIR, "comparison_results.json"))
 
     return generate_report(
         stats=stats,
@@ -372,4 +510,5 @@ def get_report(format: str = Query("markdown", enum=["markdown"])):
         benchmark_data=benchmark_data,
         isr_data=isr_data,
         pivs_data=pivs_data,
+        comparison_data=comparison_data,
     )

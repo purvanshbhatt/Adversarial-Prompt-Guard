@@ -82,7 +82,13 @@ artifacts/apids/
 | POST | `/api/metrics/isr` | Compute Injection Success Rate |
 | POST | `/api/metrics/pivs` | Compute PIVS from ISR data |
 | POST | `/api/benchmark` | 5-layer benchmark → ISR + PIVS |
-| GET | `/api/report` | Generate full Markdown research report |
+| GET | `/api/report` | Generate full Markdown research report (with generalization gap) |
+| POST | `/api/upload_dataset` | Upload external CSV dataset for real-world eval |
+| POST | `/api/upload_dataset/sample` | Load built-in curated 60-prompt jailbreak corpus |
+| GET | `/api/upload_dataset/info` | Metadata for currently loaded real-world dataset |
+| DELETE | `/api/upload_dataset` | Remove uploaded dataset |
+| POST | `/api/realworld_benchmark` | Run APIDS on real-world + synthetic, return comparison + gap |
+| GET | `/api/export_comparison` | Download CSV: comparison table + per-prompt results |
 
 ### Detection Pipeline
 
@@ -105,10 +111,21 @@ Threshold: ≥ 35 (trained) / ≥ 28 (untrained) → malicious
 3. 🧪 Test Cases — run attack simulations, bypass tests, benign FP checks
 4. 🔓 Obfuscation Lab — generate/test 6 evasion variants (leet, homoglyph, zero-width, etc.)
 5. 💬 Multi-Turn Analysis — detect priming, escalation, context poisoning across conversation turns
-6. 🤖 Train Model — configure + train ML classifier, view comparison chart
-7. 📋 Logs — paginated log viewer with malicious filter
-8. 📈 Benchmark & Metrics — 5-layer radar chart, ISR table, PIVS gauge + sub-scores
-9. 📄 Research Report — generate arXiv-ready Markdown report with all live metrics + download
+6. 🌐 Real-World Eval — upload CSV / use sample corpus; side-by-side comparison; generalization gap chart; CSV export
+7. 🤖 Train Model — configure + train ML classifier, view comparison chart
+8. 📋 Logs — paginated log viewer with malicious filter
+9. 📈 Benchmark & Metrics — 5-layer radar chart, ISR table, PIVS gauge + sub-scores
+10. 📄 Research Report — arXiv-ready Markdown report with generalization gap section + download
+
+### New: Real-World Evaluation Module
+
+- `app/evaluation/realworld.py` — core evaluation logic
+  - `SAMPLE_PROMPTS` — 60 curated prompts from public jailbreak taxonomies (DAN/STAN/DUDE, instruction override, data exfiltration, indirect injection, benign)
+  - `run_realworld_evaluation()` — full ensemble scoring → Accuracy/Precision/Recall/F1/ISR/PIVS
+  - `compute_generalization_gap()` — ΔF1, per-metric delta, diagnosis, contributing factors
+  - `export_comparison_csv()` — summary table + research metrics + per-prompt rows
+- `data/uploaded_dataset.csv` — user-uploaded or sample dataset (if loaded)
+- `data/comparison_results.json` — latest synthetic vs real-world comparison
 
 ### Python Dependencies
 

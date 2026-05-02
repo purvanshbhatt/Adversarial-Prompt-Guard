@@ -1,0 +1,121 @@
+{
+  "synthetic": {
+    "dataset_size": 300,
+    "metrics": {
+      "accuracy": 0.5933,
+      "precision": 1.0,
+      "recall": 0.3222,
+      "f1": 0.4874
+    },
+    "isr": {
+      "isr_baseline": 1.0,
+      "isr_protected": 0.6778,
+      "isr_reduction": 0.3222,
+      "catch_rate": 0.3222,
+      "false_positive_rate": 0.0,
+      "missed_attacks": 122,
+      "caught_attacks": 58,
+      "total_attacks": 180,
+      "total_benign": 120,
+      "per_category_isr": {
+        "jailbreak": 0.55,
+        "instruction_override": 0.75,
+        "data_exfiltration": 0.7333
+      }
+    },
+    "pivs": {
+      "pivs": 46.75,
+      "tier": "High Risk",
+      "sub_scores": {
+        "detection_coverage_penalty": 67.78,
+        "false_positive_burden": 0.0,
+        "obfuscation_resistance_penalty": 25.0,
+        "bypass_diversity_penalty": 100.0
+      },
+      "weights": {
+        "detection_coverage": 0.45,
+        "false_positive_burden": 0.2,
+        "obfuscation_resistance": 0.25,
+        "bypass_diversity": 0.1
+      },
+      "interpretation": "PIVS 46.8/100 (High Risk). Detection coverage penalty: 67.8, FP burden: 0.0, Obfuscation resistance penalty: 25.0."
+    }
+  },
+  "real_world": {
+    "dataset_size": 56,
+    "metrics": {
+      "accuracy": 0.4464,
+      "precision": 1.0,
+      "recall": 0.3261,
+      "f1": 0.4918
+    },
+    "isr": {
+      "isr_baseline": 1.0,
+      "isr_protected": 0.6739,
+      "isr_reduction": 0.3261,
+      "catch_rate": 0.3261,
+      "false_positive_rate": 0.0,
+      "missed_attacks": 31,
+      "caught_attacks": 15,
+      "total_attacks": 46,
+      "total_benign": 10,
+      "per_category_isr": {
+        "instruction_override": 0.7857,
+        "jailbreak": 0.375,
+        "data_exfiltration": 0.875
+      }
+    },
+    "pivs": {
+      "pivs": 46.58,
+      "tier": "High Risk",
+      "sub_scores": {
+        "detection_coverage_penalty": 67.39,
+        "false_positive_burden": 0.0,
+        "obfuscation_resistance_penalty": 25.0,
+        "bypass_diversity_penalty": 100.0
+      },
+      "weights": {
+        "detection_coverage": 0.45,
+        "false_positive_burden": 0.2,
+        "obfuscation_resistance": 0.25,
+        "bypass_diversity": 0.1
+      },
+      "interpretation": "PIVS 46.6/100 (High Risk). Detection coverage penalty: 67.4, FP burden: 0.0, Obfuscation resistance penalty: 25.0."
+    },
+    "ml_trained": false
+  },
+  "generalization_gap": {
+    "per_metric": {
+      "accuracy": {
+        "synthetic": 0.5933,
+        "real_world": 0.4464,
+        "delta": 0.1469,
+        "direction": "overfit"
+      },
+      "precision": {
+        "synthetic": 1.0,
+        "real_world": 1.0,
+        "delta": 0.0,
+        "direction": "generalizes"
+      },
+      "recall": {
+        "synthetic": 0.3222,
+        "real_world": 0.3261,
+        "delta": -0.0039,
+        "direction": "generalizes"
+      },
+      "f1": {
+        "synthetic": 0.4874,
+        "real_world": 0.4918,
+        "delta": -0.0044,
+        "direction": "generalizes"
+      }
+    },
+    "f1_gap": 0.0044,
+    "generalization_score": 0.9956,
+    "diagnosis": "Minimal generalization gap (\u0394F1 \u2264 5%). APIDS transfers well from synthetic to real-world prompts, suggesting the rule patterns and semantic anchors cover realistic attack phrasing.",
+    "contributing_factors": [
+      "Performance difference is within acceptable variance across both dimensions."
+    ]
+  }
+}
