@@ -166,6 +166,7 @@ with st.sidebar:
         "🔄 Simulation Mode",
         "🧠 Agent Network",
         "🛡️ Mitigation Engine",
+        "📡 SIEM Console",
         "─────────────────",
         "🔍 Analyze Prompt",
         "📊 Dashboard",
@@ -992,6 +993,385 @@ text-transform:uppercase;margin-bottom:6px'>✅ {label_word}</div>""", unsafe_al
 
     elif run_mit and not mit_prompt.strip():
         st.warning("Enter a prompt to analyze.")
+
+# ════════════════════════════════════════════════════════════════════
+# PAGE: SIEM Console
+# ════════════════════════════════════════════════════════════════════
+elif page == "📡 SIEM Console":
+    import plotly.graph_objects as go
+    import plotly.express as px
+    from datetime import datetime
+
+    st.markdown("""
+<div style='background:linear-gradient(135deg,rgba(88,166,255,0.12),rgba(163,113,247,0.08));
+border:1px solid rgba(88,166,255,0.3);border-radius:16px;padding:20px 28px;margin-bottom:20px'>
+<h1 style='margin:0;color:#e6edf3;font-size:26px'>📡 SIEM Console</h1>
+<p style='margin:4px 0 0;color:#8b949e;font-size:14px'>
+Splunk-compatible Security Information & Event Management — real-time log forwarding, alert trends, and MITRE ATT&CK mapping.
+</p>
+</div>""", unsafe_allow_html=True)
+
+    hours_opt = st.sidebar.selectbox("Time window", ["1h", "6h", "24h", "72h"], index=2, key="siem_hours")
+    hours_map = {"1h": 1, "6h": 6, "24h": 24, "72h": 72}
+    siem_hours = hours_map[hours_opt]
+
+    stats_data     = api_get(f"/siem/stats?hours={siem_hours}")
+    trends_data    = api_get(f"/siem/trends?hours={siem_hours}&bucket_minutes=30")
+    timeline_data  = api_get(f"/siem/attack_timeline?hours={siem_hours}&bucket_minutes=60")
+    alerts_data    = api_get(f"/siem/alerts?limit=50")
+    mitre_data     = api_get(f"/siem/mitre?hours={siem_hours}")
+
+    alert_stats    = stats_data.get("alerts", {})
+    type_summary   = stats_data.get("attack_types", {})
+    sev_summary    = stats_data.get("severities", {})
+
+    # ── KPI row ────────────────────────────────────────────────────────────────
+    st.markdown("#### Platform Overview")
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+
+    def _kpi(col, label, value, color="#e6edf3", sub=None):
+        col.markdown(
+            f"<div style='background:#161b22;border:1px solid #30363d;border-radius:10px;"
+            f"padding:12px 14px;text-align:center'>"
+            f"<div style='font-size:22px;font-weight:800;color:{color}'>{value}</div>"
+            f"<div style='font-size:11px;color:#8b949e;margin-top:2px'>{label}</div>"
+            + (f"<div style='font-size:10px;color:{color};opacity:.7'>{sub}</div>" if sub else "")
+            + "</div>",
+            unsafe_allow_html=True
+        )
+
+    _kpi(k1, "Events Ingested",  stats_data.get("total_events", 0),    "#58a6ff")
+    _kpi(k2, "High-Risk",        stats_data.get("high_risk", 0),        "#d29922")
+    _kpi(k3, "Critical",         stats_data.get("critical", 0),         "#f85149")
+    _kpi(k4, "Avg Risk Score",   stats_data.get("avg_risk_score", 0),   "#e6edf3")
+    _kpi(k5, "Active Alerts",    alert_stats.get("active", 0),          "#f85149" if alert_stats.get("active", 0) > 0 else "#3fb950")
+    _kpi(k6, "Attack Types",     len(type_summary),                     "#a371f7")
+
+    st.markdown("---")
+
+    # ── Row 1: Alert trends + Severity pie ────────────────────────────────────
+    col_trend, col_sev = st.columns([2, 1], gap="large")
+
+    with col_trend:
+        st.markdown("#### Alert Trends")
+        trends = trends_data.get("trends", [])
+        spikes = trends_data.get("spikes", [])
+
+        if trends:
+            labels     = [t["label"] for t in trends]
+            all_counts = [t["count"] for t in trends]
+            hr_counts  = [t["high_risk"] for t in trends]
+
+            fig_trend = go.Figure()
+            fig_trend.add_trace(go.Scatter(
+                x=labels, y=all_counts,
+                name="All Events",
+                line=dict(color="#58a6ff", width=2),
+                fill="tozeroy",
+                fillcolor="rgba(88,166,255,0.08)",
+                mode="lines+markers",
+                marker=dict(size=4),
+            ))
+            fig_trend.add_trace(go.Scatter(
+                x=labels, y=hr_counts,
+                name="High-Risk",
+                line=dict(color="#f85149", width=2, dash="dash"),
+                mode="lines+markers",
+                marker=dict(size=4, color="#f85149"),
+            ))
+            fig_trend.update_layout(
+                paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+                font=dict(color="#8b949e", size=11),
+                margin=dict(l=0, r=0, t=8, b=0),
+                height=220,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                xaxis=dict(gridcolor="#21262d", showgrid=True),
+                yaxis=dict(gridcolor="#21262d", showgrid=True, rangemode="tozero"),
+            )
+            st.plotly_chart(fig_trend, use_container_width=True)
+        else:
+            st.info("No trend data yet — run some detections to populate the SIEM.")
+
+    with col_sev:
+        st.markdown("#### Severity Distribution")
+        if sev_summary:
+            sev_colors = {"CRITICAL": "#f85149", "HIGH": "#d29922", "MEDIUM": "#58a6ff", "LOW": "#3fb950"}
+            fig_sev = go.Figure(go.Pie(
+                labels=list(sev_summary.keys()),
+                values=list(sev_summary.values()),
+                marker_colors=[sev_colors.get(k, "#8b949e") for k in sev_summary.keys()],
+                hole=0.55,
+                textinfo="label+percent",
+                textfont=dict(color="#c9d1d9", size=11),
+            ))
+            fig_sev.update_layout(
+                paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+                font=dict(color="#8b949e"),
+                margin=dict(l=0, r=0, t=8, b=0),
+                height=220,
+                showlegend=False,
+            )
+            st.plotly_chart(fig_sev, use_container_width=True)
+        else:
+            st.info("No severity data yet.")
+
+    # ── Row 2: Attack types bar + High-risk spike ─────────────────────────────
+    col_types, col_spike = st.columns([1, 1], gap="large")
+
+    with col_types:
+        st.markdown("#### Attack Types (Last " + hours_opt + ")")
+        if type_summary:
+            sorted_types  = sorted(type_summary.items(), key=lambda x: x[1], reverse=True)
+            type_labels   = [k.replace("_", " ").title() for k, _ in sorted_types]
+            type_values   = [v for _, v in sorted_types]
+            type_clr_map  = {
+                "Instruction Override": "#f85149",
+                "Jailbreak":            "#d29922",
+                "Data Exfiltration":    "#3fb950",
+                "Prompt Injection":     "#58a6ff",
+                "Role Play":            "#a371f7",
+                "Token Manipulation":   "#e3b341",
+                "Obfuscation":          "#c084fc",
+                "Social Engineering":   "#ff7b72",
+                "Context Manipulation": "#79c0ff",
+                "Harmful Content":      "#f8d449",
+            }
+            bar_colors = [type_clr_map.get(lbl, "#58a6ff") for lbl in type_labels]
+            fig_types = go.Figure(go.Bar(
+                x=type_values,
+                y=type_labels,
+                orientation="h",
+                marker_color=bar_colors,
+                text=type_values,
+                textposition="outside",
+                textfont=dict(color="#8b949e", size=10),
+            ))
+            fig_types.update_layout(
+                paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+                font=dict(color="#8b949e", size=11),
+                margin=dict(l=0, r=0, t=8, b=0),
+                height=max(180, len(type_labels) * 32),
+                xaxis=dict(gridcolor="#21262d"),
+                yaxis=dict(automargin=True),
+            )
+            st.plotly_chart(fig_types, use_container_width=True)
+        else:
+            st.info("No attack types recorded yet.")
+
+    with col_spike:
+        st.markdown("#### High-Risk Spike Detection (15-min buckets)")
+        spikes = trends_data.get("spikes", [])
+        if spikes:
+            sp_labels = [t["label"] for t in spikes]
+            sp_vals   = [t["high_risk"] for t in spikes]
+            threshold = 3
+            spike_colors = ["#f85149" if v >= threshold else "#58a6ff" for v in sp_vals]
+            fig_spike = go.Figure(go.Bar(
+                x=sp_labels, y=sp_vals,
+                marker_color=spike_colors,
+                text=[str(v) if v > 0 else "" for v in sp_vals],
+                textposition="outside",
+            ))
+            fig_spike.add_hline(
+                y=threshold, line_dash="dash", line_color="#d29922",
+                annotation_text=f"Spike threshold ({threshold})",
+                annotation_font=dict(color="#d29922", size=10),
+            )
+            fig_spike.update_layout(
+                paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+                font=dict(color="#8b949e", size=11),
+                margin=dict(l=0, r=0, t=8, b=0),
+                height=220,
+                xaxis=dict(gridcolor="#21262d"),
+                yaxis=dict(gridcolor="#21262d", rangemode="tozero"),
+            )
+            st.plotly_chart(fig_spike, use_container_width=True)
+        else:
+            st.info("No spike data yet.")
+
+    # ── Row 3: Attack types over time (stacked area) ──────────────────────────
+    st.markdown("#### Attack Types Over Time")
+    timeline = timeline_data.get("timeline", [])
+    if timeline and len(timeline) > 1:
+        atypes_in_tl = [k for k in timeline[0].keys() if k not in ("timestamp", "label")]
+        tl_labels = [row["label"] for row in timeline]
+        atype_colors_list = ["#f85149","#d29922","#58a6ff","#3fb950","#a371f7","#e3b341","#c084fc","#ff7b72","#79c0ff","#f8d449"]
+        fig_tl = go.Figure()
+        for i, atype in enumerate(atypes_in_tl):
+            vals = [row.get(atype, 0) for row in timeline]
+            fig_tl.add_trace(go.Scatter(
+                x=tl_labels, y=vals,
+                name=atype.replace("_", " ").title(),
+                stackgroup="one",
+                fillcolor=atype_colors_list[i % len(atype_colors_list)],
+                line=dict(color=atype_colors_list[i % len(atype_colors_list)], width=0.5),
+            ))
+        fig_tl.update_layout(
+            paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+            font=dict(color="#8b949e", size=11),
+            margin=dict(l=0, r=0, t=8, b=0),
+            height=240,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                        font=dict(size=10)),
+            xaxis=dict(gridcolor="#21262d"),
+            yaxis=dict(gridcolor="#21262d", rangemode="tozero"),
+        )
+        st.plotly_chart(fig_tl, use_container_width=True)
+    else:
+        st.info("Not enough timeline data yet — run multiple detections over time.")
+
+    st.markdown("---")
+
+    # ── Row 4: Active alerts feed ──────────────────────────────────────────────
+    alerts_list  = alerts_data.get("alerts", [])
+    active_alerts = [a for a in alerts_list if not a.get("dismissed")]
+
+    col_alerts, col_mitre = st.columns([1, 1], gap="large")
+
+    with col_alerts:
+        st.markdown(f"#### Active Alerts ({len(active_alerts)})")
+        if active_alerts:
+            for alert in active_alerts[:10]:
+                sev   = alert.get("severity", "INFO")
+                color = {"CRITICAL": "#f85149", "HIGH": "#d29922", "MEDIUM": "#58a6ff", "INFO": "#8b949e"}.get(sev, "#8b949e")
+                rule  = alert.get("label", alert.get("rule", ""))
+                msg   = alert.get("message", "")
+                det   = alert.get("detail", "")
+                risk  = alert.get("risk_score", 0)
+                ts    = alert.get("timestamp", 0)
+                try:
+                    ts_str = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
+                except Exception:
+                    ts_str = "—"
+                st.markdown(
+                    f"<div style='background:#161b22;border-left:3px solid {color};border-radius:8px;"
+                    f"padding:10px 14px;margin-bottom:8px'>"
+                    f"<div style='display:flex;justify-content:space-between;align-items:center'>"
+                    f"<span style='font-weight:700;color:{color};font-size:13px'>{rule}</span>"
+                    f"<span style='font-size:10px;color:#8b949e'>{ts_str} · score {risk}</span></div>"
+                    f"<div style='font-size:12px;color:#c9d1d9;margin-top:4px'>{msg}</div>"
+                    f"<div style='font-size:11px;color:#8b949e;margin-top:2px'>{det}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+            alert_stat = alerts_data.get("stats", {})
+            st.markdown(
+                f"<div style='font-size:11px;color:#8b949e;margin-top:4px'>"
+                f"Critical: {alert_stat.get('critical',0)} · "
+                f"High: {alert_stat.get('high',0)} · "
+                f"Total active: {alert_stat.get('active',0)}</div>",
+                unsafe_allow_html=True
+            )
+        else:
+            st.success("No active alerts — system is clean.")
+
+    # ── MITRE ATT&CK mapping ──────────────────────────────────────────────────
+    with col_mitre:
+        st.markdown("#### MITRE ATT&CK Mapping")
+        observed_ttps = mitre_data.get("observed", [])
+        all_ttps      = mitre_data.get("all_ttps", [])
+
+        if observed_ttps:
+            tactic_order = ["Initial Access","Execution","Defense Evasion",
+                            "Privilege Escalation","Collection","Exfiltration","Impact"]
+            tactic_colors_map = {
+                "Initial Access":      "#f85149",
+                "Execution":           "#d29922",
+                "Defense Evasion":     "#a371f7",
+                "Privilege Escalation":"#ff7b72",
+                "Collection":          "#58a6ff",
+                "Exfiltration":        "#3fb950",
+                "Impact":              "#e3b341",
+            }
+            for ttp in observed_ttps[:12]:
+                tactic = ttp.get("tactic","")
+                color  = tactic_colors_map.get(tactic.split("/")[0].strip(), "#58a6ff")
+                tid    = ttp.get("sub") or ttp.get("id","")
+                name   = ttp.get("name","")
+                count  = ttp.get("count",0)
+                st.markdown(
+                    f"<div style='background:#161b22;border:1px solid #30363d;border-radius:8px;"
+                    f"padding:8px 12px;margin-bottom:6px;display:flex;align-items:center;gap:10px'>"
+                    f"<code style='background:rgba(88,166,255,0.12);color:#58a6ff;"
+                    f"padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700'>{tid}</code>"
+                    f"<div style='flex:1'>"
+                    f"<div style='font-size:12px;color:#c9d1d9;font-weight:600'>{name}</div>"
+                    f"<div style='font-size:10px;color:{color};margin-top:1px'>{tactic}</div>"
+                    f"</div>"
+                    f"<span style='background:rgba(248,81,73,0.15);color:#f85149;border:1px solid #f85149;"
+                    f"padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700'>{count}×</span>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+        else:
+            st.info("No observed TTPs yet. Analyze some prompts to populate.")
+            if all_ttps:
+                st.markdown("**All mapped TTPs (coverage preview):**")
+                for ttp in all_ttps[:8]:
+                    tid  = ttp.get("sub") or ttp.get("id","")
+                    name = ttp.get("name","")
+                    tac  = ttp.get("tactic","")
+                    st.markdown(
+                        f"<div style='font-size:12px;color:#8b949e;padding:4px 0'>"
+                        f"<code style='color:#58a6ff'>{tid}</code> — {name} "
+                        f"<span style='color:#8b949e;font-size:10px'>({tac})</span></div>",
+                        unsafe_allow_html=True
+                    )
+
+    # ── Raw event log ──────────────────────────────────────────────────────────
+    with st.expander("Raw SIEM Event Log (last 20 events)"):
+        events_raw = api_get(f"/siem/events?limit=20&since_hours={siem_hours}")
+        raw_events = events_raw.get("events", [])
+        if raw_events:
+            rows = []
+            for ev in raw_events:
+                e = ev.get("event", {})
+                rows.append({
+                    "Time":         e.get("timestamp","")[:19].replace("T"," "),
+                    "Risk":         e.get("risk_score", 0),
+                    "Severity":     e.get("severity",""),
+                    "Action":       e.get("action",""),
+                    "Attack Types": ", ".join(e.get("attack_types",[])) or "—",
+                    "MITRE TTPs":   ", ".join(
+                        (t.get("sub") or t.get("id","")) for t in e.get("mitre_ttps",[])
+                    ) or "—",
+                    "Prompt":       e.get("prompt","")[:80] + ("…" if len(e.get("prompt","")) > 80 else ""),
+                })
+            st.dataframe(rows, use_container_width=True)
+        else:
+            st.info("No events yet.")
+
+    # ── HEC Simulation info ───────────────────────────────────────────────────
+    with st.expander("Splunk HEC Endpoint Info"):
+        st.markdown("""
+**Splunk HEC-Compatible Endpoint:**
+```
+POST /api/siem/hec
+Content-Type: application/json
+Authorization: Splunk <your-token>
+
+{
+  "time": 1714600000.0,
+  "host": "aurorasoc-01",
+  "source": "aurorasoc:detection",
+  "sourcetype": "aurorasoc:prompt_injection",
+  "index": "security",
+  "event": {
+    "timestamp": "2026-05-02T21:52:00Z",
+    "prompt": "...",
+    "risk_score": 85.0,
+    "attack_types": ["jailbreak"],
+    "severity": "HIGH",
+    "mitre_ttps": [{"id": "T1566", "name": "Phishing"}]
+  }
+}
+```
+**Response:**
+```json
+{"text": "Success", "code": 0, "event_id": "<uuid>"}
+```
+All detections via `/api/analyze_prompt` and `/api/mitigate` are automatically forwarded here.
+""")
 
 # ════════════════════════════════════════════════════════════════════
 elif page == "─────────────────":
