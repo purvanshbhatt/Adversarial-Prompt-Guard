@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from .mitre import map_attack_types
 from .alerting import alert_engine
+from .integrations.manager import integration_manager
 
 MAX_EVENTS   = 2000
 PERSIST_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "siem_events.json")
@@ -38,6 +39,7 @@ class SIEMStore:
         self._events.appendleft(hec_event)
         self._persist()
         alert_engine.check(hec_event)
+        integration_manager.forward_all(hec_event)
         return hec_event
 
     def ingest_detection(self, prompt: str, detection: Dict, action: Optional[str] = None) -> Dict:

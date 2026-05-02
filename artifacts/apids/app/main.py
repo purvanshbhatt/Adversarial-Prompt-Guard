@@ -31,6 +31,7 @@ from .mitigation.rewriter import rewrite as rewrite_prompt, is_llm_available
 from .siem.hec import siem_store, format_hec_event
 from .siem.alerting import alert_engine
 from .siem.mitre import map_attack_types, get_all_ttps
+from .siem.integrations.manager import integration_manager
 
 app = FastAPI(
     title="AuroraSOC — Multi-Agent AI Security Platform",
@@ -337,6 +338,47 @@ def siem_mitre(hours: float = Query(24)):
     return {
         "observed":   siem_store.get_mitre_summary(hours=hours),
         "all_ttps":   get_all_ttps(),
+    }
+
+
+@app.get("/api/siem/integrations")
+def siem_integrations():
+    return {
+        "integrations": integration_manager.get_all_statuses(),
+        "summary":      integration_manager.get_summary(),
+    }
+
+
+@app.get("/api/siem/integrations/{name}")
+def siem_integration_detail(name: str, limit: int = Query(10, ge=1, le=100)):
+    status = integration_manager.get_status(name)
+    if not status:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Integration '{name}' not found")
+    return {
+        "status":         status,
+        "recent_events":  integration_manager.get_events(name, limit=limit),
+        "native_preview": integration_manager.get_native_event_preview(name),
+    }
+
+
+@app.post("/api/siem/integrations/{name}/test")
+def siem_integration_test(name: str):
+    """Forward the most recent SIEM event to a specific integration as a connectivity test."""
+    recent = siem_store.get_events(limit=1)
+    if not recent:
+        return {"ok": False, "message": "No events to forward — analyze a prompt first"}
+    status = integration_manager.get_status(name)
+    if not status:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Integration '{name}' not found")
+    events = integration_manager.get_events(name, limit=1)
+    return {
+        "ok":      True,
+        "name":    name,
+        "mode":    status.get("mode"),
+        "message": "Test event forwarded (simulation)" if not status.get("configured") else "Test event forwarded to live endpoint",
+        "forwarded": status.get("forwarded", 0),
     }
 
 
