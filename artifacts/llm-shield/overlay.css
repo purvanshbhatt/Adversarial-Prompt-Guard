@@ -1,0 +1,242 @@
+#llmshield-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(3px);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  animation: llmshield-fade-in 0.15s ease;
+}
+
+@keyframes llmshield-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+#llmshield-card {
+  background: #0d1117;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 16px;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04);
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  max-height: 88vh;
+  overflow-y: auto;
+  animation: llmshield-slide-up 0.18s cubic-bezier(0.16,1,0.3,1);
+}
+
+@keyframes llmshield-slide-up {
+  from { transform: translateY(12px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+#llmshield-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 20px 0;
+}
+
+#llmshield-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+#llmshield-icon.critical { background: rgba(239,68,68,0.18);  border: 1px solid rgba(239,68,68,0.4); }
+#llmshield-icon.high     { background: rgba(249,115,22,0.18); border: 1px solid rgba(249,115,22,0.4); }
+#llmshield-icon.medium   { background: rgba(234,179,8,0.18);  border: 1px solid rgba(234,179,8,0.4); }
+#llmshield-icon.low      { background: rgba(34,197,94,0.18);  border: 1px solid rgba(34,197,94,0.4); }
+
+#llmshield-title-group {
+  flex: 1;
+}
+
+#llmshield-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #e6edf3;
+  margin: 0 0 2px;
+}
+
+#llmshield-subtitle {
+  font-size: 12px;
+  color: #8b949e;
+  margin: 0;
+}
+
+#llmshield-badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border-radius: 20px;
+  text-transform: uppercase;
+}
+
+#llmshield-badge.critical { background: rgba(239,68,68,0.2);  color: #f87171; border: 1px solid rgba(239,68,68,0.35); }
+#llmshield-badge.high     { background: rgba(249,115,22,0.2); color: #fb923c; border: 1px solid rgba(249,115,22,0.35); }
+#llmshield-badge.medium   { background: rgba(234,179,8,0.2);  color: #facc15; border: 1px solid rgba(234,179,8,0.35); }
+#llmshield-badge.low      { background: rgba(34,197,94,0.2);  color: #4ade80; border: 1px solid rgba(34,197,94,0.35); }
+
+#llmshield-body {
+  padding: 16px 20px;
+}
+
+#llmshield-score-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+#llmshield-score-label {
+  font-size: 12px;
+  color: #8b949e;
+  white-space: nowrap;
+}
+
+#llmshield-score-bar-wrap {
+  flex: 1;
+  height: 6px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+#llmshield-score-bar {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.4s cubic-bezier(0.16,1,0.3,1);
+}
+
+#llmshield-score-bar.critical { background: linear-gradient(90deg,#ef4444,#dc2626); }
+#llmshield-score-bar.high     { background: linear-gradient(90deg,#f97316,#ea580c); }
+#llmshield-score-bar.medium   { background: linear-gradient(90deg,#eab308,#ca8a04); }
+#llmshield-score-bar.low      { background: linear-gradient(90deg,#22c55e,#16a34a); }
+
+#llmshield-score-num {
+  font-size: 13px;
+  font-weight: 700;
+  color: #e6edf3;
+  min-width: 28px;
+  text-align: right;
+}
+
+.llmshield-section {
+  margin-bottom: 12px;
+}
+
+.llmshield-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8b949e;
+  margin-bottom: 6px;
+}
+
+#llmshield-attack-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.llmshield-tag {
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(124,58,237,0.15);
+  color: #a78bfa;
+  border: 1px solid rgba(124,58,237,0.3);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+
+#llmshield-explanation {
+  font-size: 13px;
+  color: #c9d1d9;
+  line-height: 1.6;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+#llmshield-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.llmshield-token {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  background: rgba(248,81,73,0.12);
+  color: #ffa198;
+  border: 1px solid rgba(248,81,73,0.25);
+  border-radius: 5px;
+  padding: 2px 7px;
+}
+
+#llmshield-footer {
+  display: flex;
+  gap: 8px;
+  padding: 0 20px 20px;
+}
+
+#llmshield-btn-proceed {
+  flex: 1;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  background: rgba(255,255,255,0.05);
+  color: #8b949e;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+#llmshield-btn-proceed:hover {
+  background: rgba(255,255,255,0.09);
+  color: #e6edf3;
+}
+
+#llmshield-btn-edit {
+  flex: 1.4;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  background: #7c3aed;
+  color: #fff;
+  border: none;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+#llmshield-btn-edit:hover {
+  background: #6d28d9;
+}
+
+#llmshield-powered {
+  text-align: center;
+  font-size: 10px;
+  color: rgba(139,148,158,0.5);
+  padding: 0 20px 14px;
+  letter-spacing: 0.04em;
+}
+
+.llmshield-highlight {
+  background: rgba(234,179,8,0.25) !important;
+  border-bottom: 2px solid rgba(234,179,8,0.7) !important;
+  border-radius: 2px !important;
+}
