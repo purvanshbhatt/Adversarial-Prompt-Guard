@@ -1,0 +1,23 @@
+Adversarial Prompt Injection Detector – Builds a “firewall” for AI models to block malicious user inputs (prompt injections). Few portfolios tackle LLM security directly. It combines novelty in prompt-injection defenses (an active research topic
+) and practical ML engineering.
+
+Description & Novelty: Implement a proxy that intercepts user prompts to an LLM and flags or sanitizes malicious inputs. Novel because prompt-injection (users tricking an LLM into doing unintended tasks) is a new threat in generative AI. Recent studies demonstrate multi-agent LLM architectures that reduce injection success
+. We push further by building a real-time classifier for malicious prompts, a niche but urgent problem as companies rush to deploy ChatGPT features. Few have built end-to-end demos of this, so it stands out.
+
+Research Value: High. Prompt-injection defense is an open area. One paper introduces metrics like Injection Success Rate and sanitization rates
+. You could research new features or multi-agent schemes for prompt sanitization, and contribute novel evaluation metrics (e.g. a Prompt Injection Vulnerability Score). Datasets must be collected (e.g. craft known injection prompts like “ignore prior instructions” attacks) since no public dataset exists. This can lead to a conference submission in AI security or human-AI interaction (ICML, NeurIPS Security Workshops, NDSS).
+
+Technical Feasibility (Replit): Feasible with care. A prototype can be a Python web app (Flask/FastAPI) that calls a free LLM (e.g. GPT-3.5 via an API or an open model). Replit free offers 1 vCPU, 2GB RAM, and limited API credits
+. An ML classifier (e.g. fine-tuned BERT) can run on CPU for small inputs. Use libraries like transformers (lightweight model) and Python NLP. Dev steps: dataset gathering (1 wk), prompt classifier model (1–2 wk), proxy architecture (1 wk), integration and testing (1 wk). Total ~4–5 weeks. Replit’s storage (2GB) suffices for code and small models. Network calls (to LLM APIs) must fit the 10 GiB/month cap
+ (unlikely to be exceeded in development).
+
+Evaluation: Measure detection accuracy (precision/recall) on a test set of malicious vs benign prompts. Test with varied attacks: naive injections, obfuscated character attacks, multi-turn context carry-overs. Metrics: classification F1 score, false-positive rate. Also compute Injection Success Rate reduction (as in the literature
+) by comparing how often an untampered vs protected system would execute a malicious prompt. Conduct user-style experiments (e.g. varied adversarial prompts, measure catch rate). For an academic angle, benchmark against simple baselines (e.g. keyword filter vs ML model).
+
+Deliverables: A clear deliverable is a research-style report/paper (outline: introduction to prompt injection, our approach, dataset, model, results) for a conference or arXiv. Code repository with modules: data/ (dataset of prompts), model/ (classifier training), proxy/ (Flask app implementing the detection), tests. A live demo on Replit (if APIs allowed) or video screen-recording. We’ll share the prompt dataset and any synthetic examples. The repository should be reproducible (environment specs, requirements, sample queries). Deliverables: paper draft, GitHub repo with demo, README walkthrough, dataset samples.
+
+Hiring Impact: Demonstrates cutting-edge AI security (coveted in cybersecurity+AI roles). Skills: LLM understanding, adversarial ML, NLP. In an interview you’d talk about “securing AI by intercepting attacks on prompts”, multi-agent AI systems, and developing custom metrics. The project shows you can handle a real AI threat and engineer a solution end-to-end, which is impressive to both academia and industry (especially companies building AI products).
+
+Risks/Ethical/Legal: Ensure only synthetic or consenting data is used. Our prompt dataset will involve user-supplied malicious content – ensure no personal data. If calling an LLM API, avoid sending sensitive content. Mitigation: use dummy data, sanitize anything collected. Ethical: Inform any testers they are interacting with an AI defense demo, not a real user system. Use disclaimers, clear that it’s for research/education only. Avoid overclaiming: model may fail on novel attacks; this is a prototype.
+
+Priority: High – This is very timely and research-oriented (Generative AI is hot), has publication potential, and showcases AI/ML skills. It also addresses a gap few current projects tackle.

@@ -1,0 +1,63 @@
+Build a production-grade Adversarial Prompt Injection Detection System for LLM applications.
+
+System Requirements:
+- Language: Python
+- Frameworks: FastAPI (API), Streamlit (UI dashboard)
+- ML: Use transformer-based embeddings (sentence-transformers or OpenAI embeddings)
+- Include both rule-based and ML-based detection layers
+
+Core Features:
+1. Input Processing Pipeline:
+   - Accept user prompts via API and UI
+   - Normalize and tokenize inputs
+   - Detect hidden instructions (e.g., "ignore previous instructions", "system override")
+
+2. Detection Engine:
+   - Rule-based detection (regex + heuristics)
+   - ML classifier (train on prompt injection dataset)
+   - Semantic similarity detection (compare with known attack patterns)
+   - Output risk score (0–100)
+
+3. Dataset:
+   - Create synthetic dataset of prompt injections and benign prompts
+   - Include categories:
+     - Instruction override
+     - Data exfiltration attempts
+     - Jailbreak prompts
+   - Save dataset as CSV/JSON
+
+4. Model Training:
+   - Train a binary classifier (malicious vs benign)
+   - Use scikit-learn or PyTorch
+   - Include train/test split, accuracy, precision, recall, F1
+
+5. Logging & Explainability:
+   - Log all analyzed prompts
+   - Provide explanation (why flagged)
+   - Highlight suspicious tokens
+
+6. Dashboard:
+   - Real-time prompt analysis
+   - Attack type breakdown
+   - Risk score visualization
+   - Logs viewer
+
+7. API Endpoints:
+   - /analyze_prompt
+   - /train_model
+   - /logs
+
+8. Security Simulation:
+   - Include test cases simulating attacks on LLM agents
+   - Show bypass attempts and detection results
+
+9. Research Output:
+   - Generate evaluation metrics
+   - Compare rule-based vs ML detection
+   - Export results as CSV
+
+10. Documentation:
+   - Include README with architecture diagram
+   - Add section: “Research Contribution & Future Work”
+
+Make the system modular and scalable. Use clean code structure with separate modules for preprocessing, detection, training, and API.
