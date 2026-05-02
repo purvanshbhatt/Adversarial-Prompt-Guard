@@ -28,6 +28,9 @@ from .agents.orchestrator import SOCOrchestrator
 from .mitigation.policy_engine import decide as policy_decide, policy_description, POLICIES
 from .mitigation.sanitizer import sanitize as sanitize_prompt, diff_highlight_html, sanitized_highlight_html
 from .mitigation.rewriter import rewrite as rewrite_prompt, is_llm_available
+from .siem.hec import siem_store, format_hec_event
+from .siem.alerting import alert_engine
+from .siem.mitre import map_attack_types, get_all_ttps
 
 app = FastAPI(
     title="AuroraSOC — Multi-Agent AI Security Platform",
@@ -203,6 +206,7 @@ def analyze_prompt(request: PromptRequest):
         "sem_score":     result["semantic_score"],
         "obf_score":     result["obfuscation_score"],
     })
+    siem_store.ingest_detection(request.prompt, result, action="DETECT")
     return result
 
 
@@ -236,6 +240,8 @@ def mitigate_prompt(request: MitigateRequest):
     char_reduction = max(0, len(request.prompt) - len(sanitized))
     pct_reduction  = round(char_reduction / max(len(request.prompt), 1) * 100, 1)
 
+    siem_store.ingest_detection(request.prompt, detection, action=action)
+
     return {
         "original":          request.prompt,
         "sanitized":         sanitized,
@@ -261,6 +267,76 @@ def get_policies():
     return {
         "policies": {name: policy_description(name) for name in POLICIES},
         "llm_rewrite_available": is_llm_available(),
+    }
+
+
+# ── SIEM Endpoints ──────────────────────────────────────────────────────────
+
+@app.post("/api/siem/hec")
+def siem_hec(payload: dict):
+    """
+    Splunk-compatible HTTP Event Collector endpoint.
+    Accepts a Splunk HEC envelope: { time, host, source, sourcetype, index, event: {...} }
+    """
+    event = siem_store.ingest(payload)
+    return {"text": "Success", "code": 0, "event_id": event["_id"]}
+
+
+@app.get("/api/siem/events")
+def siem_events(
+    limit: int        = Query(100, ge=1, le=500),
+    attack_type: str  = Query(None),
+    min_risk: float   = Query(None),
+    since_hours: float = Query(24),
+):
+    events = siem_store.get_events(limit=limit, attack_type=attack_type,
+                                   min_risk=min_risk, since_hours=since_hours)
+    return {"events": events, "count": len(events)}
+
+
+@app.get("/api/siem/stats")
+def siem_stats(hours: float = Query(24)):
+    stats        = siem_store.get_stats(hours=hours)
+    alert_stats  = alert_engine.get_stats()
+    return {**stats, "alerts": alert_stats}
+
+
+@app.get("/api/siem/trends")
+def siem_trends(hours: float = Query(24), bucket_minutes: int = Query(30)):
+    return {
+        "trends": siem_store.get_trends(hours=hours, bucket_minutes=bucket_minutes),
+        "spikes": siem_store.get_spike_series(hours=hours),
+    }
+
+
+@app.get("/api/siem/attack_timeline")
+def siem_attack_timeline(hours: float = Query(24), bucket_minutes: int = Query(60)):
+    return {
+        "timeline":       siem_store.get_attack_timeline(hours=hours, bucket_minutes=bucket_minutes),
+        "type_summary":   siem_store.get_attack_type_summary(hours=hours),
+        "severity_summary": siem_store.get_severity_summary(hours=hours),
+    }
+
+
+@app.get("/api/siem/alerts")
+def siem_alerts(limit: int = Query(50, ge=1, le=200), active_only: bool = Query(False)):
+    return {
+        "alerts": alert_engine.get_alerts(limit=limit, active_only=active_only),
+        "stats":  alert_engine.get_stats(),
+    }
+
+
+@app.post("/api/siem/alerts/{alert_id}/dismiss")
+def siem_dismiss_alert(alert_id: str):
+    ok = alert_engine.dismiss(alert_id)
+    return {"dismissed": ok, "alert_id": alert_id}
+
+
+@app.get("/api/siem/mitre")
+def siem_mitre(hours: float = Query(24)):
+    return {
+        "observed":   siem_store.get_mitre_summary(hours=hours),
+        "all_ttps":   get_all_ttps(),
     }
 
 
