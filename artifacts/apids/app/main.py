@@ -35,6 +35,9 @@ from .siem.integrations.manager import integration_manager
 from .elastic.store import elastic_store
 from .elastic.rules import rules_engine
 from .elastic.hunting import execute_hunt, PREDEFINED_HUNTS, FIELD_DESCRIPTIONS, suggest_queries
+from .adversary.runner import adversary_runner
+from .adversary.generator import attack_generator, CATEGORY_WEIGHTS
+from .adversary.mutator import MutationStrategy, STRATEGY_DESCRIPTIONS
 
 app = FastAPI(
     title="AuroraSOC — Multi-Agent AI Security Platform",
@@ -484,6 +487,87 @@ def elastic_hunting_presets():
 @app.get("/api/elastic/hunting/suggest")
 def elastic_suggest(q: str = Query("")):
     return {"suggestions": suggest_queries(q)}
+
+# ── Adversary Simulation Endpoints ──────────────────────────────────────────
+
+@app.post("/api/adversary/run")
+def adversary_run(payload: dict):
+    """
+    Start a new adversary session.
+    Body: {
+      "iterations": 20,
+      "categories": ["jailbreak", "instruction_override"],
+      "complexity": "medium",
+      "delay_ms": 100
+    }
+    """
+    sid = adversary_runner.start_session(payload)
+    return {"session_id": sid, "status": "started"}
+
+@app.get("/api/adversary/status")
+def adversary_status(session_id: str = Query(None)):
+    if session_id:
+        s = adversary_runner.get_session(session_id)
+    else:
+        s = adversary_runner.get_active()
+    if not s:
+        return {"status": "none", "session_id": None}
+    return s.to_status_dict()
+
+@app.get("/api/adversary/results")
+def adversary_results(session_id: str = Query(None)):
+    if session_id:
+        s = adversary_runner.get_session(session_id)
+    else:
+        s = adversary_runner.get_active()
+    if not s:
+        return {"error": "No session found"}
+    return {
+        "status":      s.status,
+        "session_id":  s.id,
+        "metrics":     s.get_metrics(),
+        "iterations":  [r.to_dict() for r in list(s.iterations)[-20:]],
+    }
+
+@app.get("/api/adversary/history")
+def adversary_history():
+    return {"sessions": adversary_runner.list_sessions()}
+
+@app.post("/api/adversary/stop")
+def adversary_stop(payload: dict = None):
+    sid = (payload or {}).get("session_id") if payload else None
+    if not sid:
+        s = adversary_runner.get_active()
+        sid = s.id if s else None
+    if sid:
+        ok = adversary_runner.stop_session(sid)
+        return {"stopped": ok, "session_id": sid}
+    return {"stopped": False, "error": "No active session"}
+
+@app.get("/api/adversary/generator/sample")
+def adversary_sample(
+    category:   str = Query(None),
+    complexity: str = Query("medium"),
+    count:      int = Query(5, ge=1, le=20),
+):
+    prompts = attack_generator.generate_batch(count=count, categories=[category] if category else None, complexity=complexity)
+    return {
+        "samples": [
+            {"text": p.text, "category": p.category, "subcategory": p.subcategory,
+             "complexity": p.metadata.get("complexity","medium")}
+            for p in prompts
+        ]
+    }
+
+@app.get("/api/adversary/strategies")
+def adversary_strategies():
+    return {
+        "strategies": [
+            {"id": s.value, "label": STRATEGY_DESCRIPTIONS[s]}
+            for s in MutationStrategy
+        ],
+        "categories": list(CATEGORY_WEIGHTS.keys()),
+    }
 
 @app.post("/api/train_model")
 def train_model(request: TrainingRequest):

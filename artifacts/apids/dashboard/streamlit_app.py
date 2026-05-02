@@ -168,6 +168,7 @@ with st.sidebar:
         "🛡️ Mitigation Engine",
         "📡 SIEM Console",
         "🔎 Elastic Pipeline",
+        "⚔️ Adversary Sim",
         "─────────────────",
         "🔍 Analyze Prompt",
         "📊 Dashboard",
@@ -1805,6 +1806,331 @@ Try: &nbsp;<code>jailbreak</code> &nbsp;·&nbsp; <code>attack_category:instructi
                 )
         else:
             st.info("No documents indexed yet.")
+
+# ════════════════════════════════════════════════════════════════════
+# PAGE: Adversary Sim
+# ════════════════════════════════════════════════════════════════════
+elif page == "⚔️ Adversary Sim":
+    import plotly.graph_objects as go
+    import plotly.express as px
+    import json as _json
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    st.markdown("""
+<div style='background:linear-gradient(135deg,rgba(248,81,73,0.12),rgba(163,113,247,0.08));
+border:1px solid rgba(248,81,73,0.35);border-radius:16px;padding:18px 26px;margin-bottom:18px'>
+<h1 style='margin:0;color:#e6edf3;font-size:24px'>⚔️ Adaptive Adversary Simulator</h1>
+<p style='margin:4px 0 0;color:#8b949e;font-size:13px'>
+Red-team stress-test · Multi-strategy mutation engine · Bypass analytics · Attack evolution tracking
+</p>
+</div>""", unsafe_allow_html=True)
+
+    # ── Config panel ──────────────────────────────────────────────────────────
+    st.markdown("#### Configure Attack Session")
+    cfg_c1, cfg_c2, cfg_c3, cfg_c4 = st.columns(4)
+    with cfg_c1:
+        adv_iters = st.slider("Iterations", 10, 100, 30, step=5, key="adv_iters")
+    with cfg_c2:
+        adv_complexity = st.selectbox("Complexity", ["low","medium","high"], index=1, key="adv_cmplx")
+    with cfg_c3:
+        all_cats = ["jailbreak","instruction_override","data_exfiltration","obfuscation","social_engineering"]
+        adv_cats = st.multiselect("Attack categories", all_cats, default=all_cats, key="adv_cats")
+    with cfg_c4:
+        adv_delay = st.slider("Delay (ms)", 0, 500, 100, step=50, key="adv_delay",
+                               help="Delay between iterations to avoid overloading detector")
+
+    btn_c1, btn_c2, btn_c3 = st.columns([2, 1, 3])
+    with btn_c1:
+        run_btn  = st.button("🚀 Launch Attack Session", use_container_width=True, type="primary", key="adv_run")
+    with btn_c2:
+        stop_btn = st.button("⏹ Stop", use_container_width=True, key="adv_stop")
+
+    # ── Start / Stop ──────────────────────────────────────────────────────────
+    if run_btn:
+        payload = {
+            "iterations": adv_iters,
+            "categories": adv_cats or all_cats,
+            "complexity": adv_complexity,
+            "delay_ms":   adv_delay,
+        }
+        resp = api_post("/adversary/run", payload)
+        sid  = resp.get("session_id","")
+        st.session_state["adv_session_id"] = sid
+        st.success(f"Session {sid} launched — {adv_iters} iterations · {adv_complexity} complexity")
+
+    if stop_btn:
+        sid = st.session_state.get("adv_session_id")
+        api_post("/adversary/stop", {"session_id": sid} if sid else {})
+        st.warning("Stop signal sent.")
+
+    # ── Live status ───────────────────────────────────────────────────────────
+    adv_sid = st.session_state.get("adv_session_id")
+    status_raw = api_get(f"/adversary/status{('?session_id='+adv_sid) if adv_sid else ''}")
+    adv_status = status_raw.get("status","none")
+
+    if adv_status == "running":
+        cur  = status_raw.get("current_iter",0)
+        tot  = status_raw.get("total_iters",1)
+        pct  = status_raw.get("progress_pct",0)
+        st.markdown(f"**Status:** 🟢 Running — iteration **{cur}** / {tot}")
+        st.progress(pct / 100, text=f"{pct}% complete")
+        st.button("🔄 Refresh", key="adv_refresh")
+    elif adv_status == "complete":
+        st.markdown("**Status:** ✅ Session complete")
+    elif adv_status == "stopped":
+        st.markdown("**Status:** ⏹ Stopped")
+    elif adv_status == "error":
+        st.error(f"Session error: {status_raw.get('error','unknown')}")
+
+    # ── Results ───────────────────────────────────────────────────────────────
+    if adv_status in ("running","complete","stopped"):
+        results_raw = api_get(f"/adversary/results{('?session_id='+adv_sid) if adv_sid else ''}")
+        metrics     = results_raw.get("metrics", {})
+        iterations  = results_raw.get("iterations", [])
+
+        if metrics.get("total", 0) > 0:
+            st.markdown("---")
+            st.markdown("#### Session Metrics")
+
+            # KPI row
+            mk1,mk2,mk3,mk4,mk5,mk6 = st.columns(6)
+            _sev_col = {"critical":"#f85149","high":"#d29922","medium":"#58a6ff","low":"#3fb950"}
+            def _adv_kpi(col, label, val, color="#e6edf3", suffix=""):
+                col.markdown(
+                    f"<div style='background:#0d1117;border:1px solid #21262d;border-radius:10px;"
+                    f"padding:10px 12px;text-align:center'>"
+                    f"<div style='font-size:22px;font-weight:800;color:{color}'>{val}{suffix}</div>"
+                    f"<div style='font-size:10px;color:#8b949e;margin-top:2px'>{label}</div></div>",
+                    unsafe_allow_html=True)
+
+            bypass_rate = metrics.get("bypass_rate",0)
+            bclr = "#f85149" if bypass_rate > 40 else ("#d29922" if bypass_rate > 20 else "#3fb950")
+            _adv_kpi(mk1, "Total Attacks",     metrics.get("total",0),       "#e6edf3")
+            _adv_kpi(mk2, "Bypassed",          metrics.get("bypassed",0),    "#f85149")
+            _adv_kpi(mk3, "Detected",          metrics.get("detected",0),    "#3fb950")
+            _adv_kpi(mk4, "Bypass Rate",       bypass_rate,                  bclr, "%")
+            _adv_kpi(mk5, "Avg Risk Score",    metrics.get("avg_risk_score",0), "#58a6ff")
+            _adv_kpi(mk6, "Avg Mutations/Bypass", metrics.get("avg_mutations_per_bypass",0), "#a371f7")
+
+            st.markdown("---")
+
+            # ── ROW: Timeline + Evolution ──────────────────────────────────────
+            tl_col, evo_col = st.columns(2)
+
+            with tl_col:
+                st.markdown("#### Risk Score Over Time")
+                tl = metrics.get("risk_timeline", [])
+                if tl:
+                    fig_tl = go.Figure()
+                    fig_tl.add_trace(go.Scatter(
+                        x=[b["iteration"] for b in tl],
+                        y=[b["avg_risk"] for b in tl],
+                        mode="lines+markers", name="Avg Risk",
+                        line=dict(color="#58a6ff", width=2),
+                        fill="tozeroy", fillcolor="rgba(88,166,255,0.08)",
+                    ))
+                    fig_tl.add_trace(go.Scatter(
+                        x=[b["iteration"] for b in tl],
+                        y=[b["max_risk"] for b in tl],
+                        mode="lines", name="Max Risk",
+                        line=dict(color="#f85149", width=1, dash="dot"),
+                    ))
+                    fig_tl.add_trace(go.Scatter(
+                        x=[b["iteration"] for b in tl],
+                        y=[b["min_risk"] for b in tl],
+                        mode="lines", name="Min Risk",
+                        line=dict(color="#3fb950", width=1, dash="dot"),
+                    ))
+                    fig_tl.add_hline(y=40, line_dash="dash", line_color="#d29922",
+                                     annotation_text="Detection threshold (40)", annotation_font_color="#d29922")
+                    fig_tl.update_layout(
+                        paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+                        font=dict(color="#8b949e", size=10), height=240,
+                        margin=dict(l=0,r=0,t=8,b=0),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9)),
+                        xaxis=dict(gridcolor="#21262d", title="Iteration"),
+                        yaxis=dict(gridcolor="#21262d", title="Risk Score", range=[0,105]),
+                    )
+                    st.plotly_chart(fig_tl, use_container_width=True)
+                else:
+                    st.caption("Awaiting data…")
+
+            with evo_col:
+                st.markdown("#### Bypass Rate Evolution")
+                evo = metrics.get("evolution", [])
+                if evo:
+                    fig_evo = go.Figure()
+                    fig_evo.add_trace(go.Bar(
+                        x=[f"{e['window_start']}–{e['window_end']}" for e in evo],
+                        y=[e["bypass_rate"] for e in evo],
+                        name="Bypass Rate %",
+                        marker=dict(
+                            color=[e["bypass_rate"] for e in evo],
+                            colorscale=[[0,"#3fb950"],[0.4,"#d29922"],[1,"#f85149"]],
+                            showscale=False,
+                        ),
+                        text=[f"{e['bypass_rate']}%" for e in evo],
+                        textposition="outside", textfont=dict(size=9, color="#8b949e"),
+                    ))
+                    fig_evo.update_layout(
+                        paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+                        font=dict(color="#8b949e", size=10), height=240,
+                        margin=dict(l=0,r=0,t=8,b=0),
+                        xaxis=dict(gridcolor="#21262d", title="Iteration window", tickfont=dict(size=8)),
+                        yaxis=dict(gridcolor="#21262d", title="Bypass %", range=[0,105]),
+                    )
+                    st.plotly_chart(fig_evo, use_container_width=True)
+                else:
+                    st.caption("Awaiting data…")
+
+            # ── ROW: Category breakdown + Mutation strategies ──────────────────
+            cat_col, mut_col = st.columns(2)
+
+            with cat_col:
+                st.markdown("#### Per-Category Breakdown")
+                cat_data = metrics.get("per_category", {})
+                if cat_data:
+                    cat_names = [c.replace("_"," ").title() for c in cat_data]
+                    cat_det   = [v.get("detected",0) for v in cat_data.values()]
+                    cat_byp   = [v.get("bypassed",0) for v in cat_data.values()]
+                    fig_cat = go.Figure()
+                    fig_cat.add_trace(go.Bar(x=cat_names, y=cat_det, name="Detected",
+                                             marker_color="#3fb950", text=cat_det, textposition="inside"))
+                    fig_cat.add_trace(go.Bar(x=cat_names, y=cat_byp, name="Bypassed",
+                                             marker_color="#f85149", text=cat_byp, textposition="inside"))
+                    fig_cat.update_layout(
+                        barmode="stack",
+                        paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+                        font=dict(color="#8b949e", size=10), height=240,
+                        margin=dict(l=0,r=0,t=8,b=0),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                        xaxis=dict(gridcolor="#21262d", tickfont=dict(size=9)),
+                        yaxis=dict(gridcolor="#21262d"),
+                    )
+                    st.plotly_chart(fig_cat, use_container_width=True)
+
+            with mut_col:
+                st.markdown("#### Mutation Strategy Effectiveness")
+                strat_data = metrics.get("mutation_strategies", [])
+                if strat_data:
+                    strat_names = [s["strategy"].replace("_"," ").title() for s in strat_data]
+                    strat_rates = [s["success_rate"] for s in strat_data]
+                    strat_att   = [s["attempts"] for s in strat_data]
+                    fig_mut = go.Figure(go.Bar(
+                        x=strat_rates, y=strat_names, orientation="h",
+                        marker=dict(
+                            color=strat_rates,
+                            colorscale=[[0,"#3fb950"],[0.5,"#d29922"],[1,"#f85149"]],
+                            showscale=False,
+                        ),
+                        text=[f"{r}% ({a} tries)" for r, a in zip(strat_rates, strat_att)],
+                        textposition="outside", textfont=dict(size=9, color="#8b949e"),
+                    ))
+                    fig_mut.update_layout(
+                        paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+                        font=dict(color="#8b949e", size=10), height=max(180, len(strat_names)*28),
+                        margin=dict(l=0,r=0,t=8,b=0),
+                        xaxis=dict(gridcolor="#21262d", title="Success Rate %", range=[0,110]),
+                        yaxis=dict(automargin=True),
+                    )
+                    st.plotly_chart(fig_mut, use_container_width=True)
+
+            st.markdown("---")
+
+            # ── Hardest-to-detect prompts ──────────────────────────────────────
+            st.markdown("#### 🎯 Hardest-to-Detect Prompts (Successful Bypasses)")
+            hardest = metrics.get("hardest_prompts", [])
+            if hardest:
+                for i, hp in enumerate(hardest[:8]):
+                    risk    = hp.get("risk_score",0)
+                    cat     = hp.get("category","").replace("_"," ").title()
+                    muts    = hp.get("mutation_rounds",0)
+                    strats  = hp.get("mutation_strategies",[])
+                    ftext   = hp.get("final_prompt","")[:180]
+                    otext   = hp.get("original_prompt","")[:100]
+                    risk_clr = "#3fb950" if risk < 20 else ("#d29922" if risk < 35 else "#f85149")
+                    st.markdown(
+                        f"<div style='background:#0d1117;border:1px solid #21262d;"
+                        f"border-left:3px solid {risk_clr};border-radius:8px;"
+                        f"padding:10px 14px;margin-bottom:8px'>"
+                        f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px'>"
+                        f"<span style='font-size:11px;font-weight:700;color:#e6edf3'>#{i+1} — {cat}</span>"
+                        f"<span style='font-size:10px;color:{risk_clr};font-weight:700'>"
+                        f"Risk: {risk:.1f} | Mutations: {muts}</span></div>"
+                        f"<div style='font-size:11px;color:#c9d1d9;font-style:italic;margin-bottom:5px'>"
+                        f"&ldquo;{ftext}…&rdquo;</div>"
+                        + (f"<div style='font-size:10px;color:#8b949e'>Original: {otext}…</div>" if otext != ftext else "")
+                        + "<div style='margin-top:5px'>"
+                        + "".join(
+                            "<code style='font-size:9px;color:#a371f7;background:rgba(163,113,247,0.12);"
+                            "padding:1px 5px;border-radius:3px;margin-right:4px'>" + s + "</code>"
+                            for s in strats
+                        )
+                        + "</div></div>",
+                        unsafe_allow_html=True
+                    )
+            else:
+                st.info("No successful bypasses yet — the detector is holding strong.")
+
+            # ── Iteration feed ─────────────────────────────────────────────────
+            with st.expander(f"📋 Last {len(iterations)} iterations detail"):
+                rows = []
+                for it in reversed(iterations):
+                    rows.append({
+                        "#":          it.get("iteration",""),
+                        "Category":   it.get("category","").replace("_"," ").title(),
+                        "Risk":       it.get("risk_score",0),
+                        "ML Score":   it.get("ml_score",0),
+                        "Bypassed":   "✅ Yes" if it.get("bypassed") else "🛡️ No",
+                        "Mutations":  it.get("mutation_rounds",0),
+                        "Strategies": ", ".join(it.get("mutation_strategies",[])),
+                        "Duration":   f"{it.get('duration_ms',0):.0f}ms",
+                        "Prompt":     it.get("final_prompt","")[:60] + "…",
+                    })
+                if rows:
+                    st.dataframe(rows, use_container_width=True)
+
+    # ── Sample generator preview ───────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 🧪 Attack Sample Preview")
+    samp_c1, samp_c2, samp_c3 = st.columns([2,2,1])
+    with samp_c1:
+        samp_cat = st.selectbox("Category", ["(any)"] + all_cats, key="samp_cat")
+    with samp_c2:
+        samp_cmplx = st.selectbox("Complexity", ["low","medium","high"], index=1, key="samp_cmplx")
+    with samp_c3:
+        samp_btn = st.button("Generate Samples", use_container_width=True, key="samp_btn")
+
+    if samp_btn:
+        cat_param = "" if samp_cat == "(any)" else f"&category={samp_cat}"
+        samples_raw = api_get(f"/adversary/generator/sample?complexity={samp_cmplx}&count=6{cat_param}")
+        samples = samples_raw.get("samples", [])
+        if samples:
+            for s in samples:
+                cat_label = s.get("category","").replace("_"," ").title()
+                sub_label = s.get("subcategory","")
+                st.markdown(
+                    f"<div style='background:#0d1117;border:1px solid #30363d;border-radius:8px;"
+                    f"padding:10px 14px;margin-bottom:6px;font-size:12px'>"
+                    f"<span style='color:#f85149;font-size:10px;font-weight:700'>[{cat_label} / {sub_label}]</span>"
+                    f"<div style='color:#c9d1d9;margin-top:4px;font-style:italic'>&ldquo;{s.get('text','')}…&rdquo;</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+    # ── Strategies reference ───────────────────────────────────────────────────
+    with st.expander("🔀 Mutation Strategies Reference"):
+        strats_raw = api_get("/adversary/strategies")
+        strat_list = strats_raw.get("strategies", [])
+        s_cols = st.columns(2)
+        for si, strat in enumerate(strat_list):
+            s_cols[si % 2].markdown(
+                f"<div style='background:#0d1117;border:1px solid #21262d;border-radius:6px;"
+                f"padding:7px 12px;margin-bottom:5px;font-size:11px'>"
+                f"<code style='color:#a371f7'>{strat['id']}</code>"
+                f"<span style='color:#8b949e;margin-left:8px'>{strat['label']}</span></div>",
+                unsafe_allow_html=True
+            )
 
 # ════════════════════════════════════════════════════════════════════
 elif page == "─────────────────":
