@@ -20,6 +20,10 @@ from .multiturn import analyze_conversation
 from .metrics.isr import compute_isr
 from .metrics.pivs import compute_pivs
 from .report import generate_report
+from .adversarial.generator import generate_attacks, mutate_attack
+from .adversarial.rl_loop import run_adaptive_loop, load_latest_results, load_history
+from .adversarial.strategies import ALL_STRATEGIES
+from .adversarial.mutation import MUTATION_ORDER
 
 app = FastAPI(
     title="Adversarial Prompt Injection Detection System (APIDS)",
@@ -65,6 +69,26 @@ class ISRRequest(BaseModel):
 class PIVSRequest(BaseModel):
     isr_data: Dict[str, Any]
     obfuscated_results: Optional[List[Dict[str, Any]]] = None
+
+class GenerateAttacksRequest(BaseModel):
+    strategy: Optional[str] = "roleplay_jailbreak"
+    n: Optional[int] = 5
+    goal: Optional[str] = "bypass safety restrictions"
+    difficulty_min: Optional[int] = 1
+    difficulty_max: Optional[int] = 5
+    use_llm: Optional[bool] = False
+
+class AdaptiveLoopRequest(BaseModel):
+    strategy: Optional[str] = "roleplay_jailbreak"
+    goal: Optional[str] = "bypass safety restrictions"
+    max_iterations: Optional[int] = 12
+    difficulty_min: Optional[int] = 1
+    difficulty_max: Optional[int] = 5
+    use_llm: Optional[bool] = False
+
+class MutateRequest(BaseModel):
+    prompt: str
+    mutations: List[str]
 
 
 # ── Core detection helpers ──────────────────────────────────────────────────
@@ -512,3 +536,82 @@ def get_report(format: str = Query("markdown", enum=["markdown"])):
         pivs_data=pivs_data,
         comparison_data=comparison_data,
     )
+
+
+# ── Adversarial attack generator endpoints ───────────────────────────────────
+
+@app.get("/api/adversarial/strategies")
+def adversarial_strategies():
+    """Return all available attack strategies and mutation operators."""
+    from .adversarial.strategies import STRATEGY_TEMPLATES
+    return {
+        "strategies": ALL_STRATEGIES,
+        "strategy_details": {
+            s: [{"id": t["id"], "name": t["name"], "difficulty": t["difficulty"],
+                 "description": t["description"]}
+                for t in templates]
+            for s, templates in STRATEGY_TEMPLATES.items()
+        },
+        "mutation_operators": list(MUTATION_ORDER),
+        "llm_available": bool(os.environ.get("OPENAI_API_KEY", "").strip()),
+    }
+
+
+@app.post("/api/adversarial/generate")
+def adversarial_generate(req: GenerateAttacksRequest):
+    """Generate a batch of adversarial attack prompts for a given strategy."""
+    return generate_attacks(
+        strategy=req.strategy or "roleplay_jailbreak",
+        n=min(req.n or 5, 20),
+        goal=req.goal or "bypass safety restrictions",
+        difficulty_min=req.difficulty_min or 1,
+        difficulty_max=req.difficulty_max or 5,
+        use_llm=req.use_llm or False,
+    )
+
+
+@app.post("/api/adversarial/mutate")
+def adversarial_mutate(req: MutateRequest):
+    """Apply one or more mutation operators to a prompt and return variants."""
+    from .adversarial.mutation import MUTATION_REGISTRY
+    results = {}
+    for mut_name in req.mutations:
+        if mut_name in MUTATION_REGISTRY:
+            results[mut_name] = mutate_attack(req.prompt, [mut_name])
+    return {
+        "original": req.prompt,
+        "mutations": results,
+    }
+
+
+@app.post("/api/adversarial/run_loop")
+def adversarial_run_loop(req: AdaptiveLoopRequest):
+    """
+    Run the full reinforcement-style adaptive attack loop.
+    Returns the complete evolution log and summary statistics.
+    This endpoint may take 5–30 seconds depending on iteration count.
+    """
+    return run_adaptive_loop(
+        strategy=req.strategy or "roleplay_jailbreak",
+        goal=req.goal or "bypass safety restrictions",
+        max_iterations=min(req.max_iterations or 12, 20),
+        difficulty_min=req.difficulty_min or 1,
+        difficulty_max=req.difficulty_max or 5,
+        use_llm=req.use_llm or False,
+    )
+
+
+@app.get("/api/adversarial/results")
+def adversarial_results():
+    """Return the summary of the most recent adaptive loop run."""
+    data = load_latest_results()
+    if data is None:
+        return {"available": False, "message": "No loop results yet. Run /api/adversarial/run_loop first."}
+    return {"available": True, **data}
+
+
+@app.get("/api/adversarial/history")
+def adversarial_history():
+    """Return the history of all adaptive loop runs (last 100)."""
+    history = load_history()
+    return {"runs": history, "count": len(history)}
