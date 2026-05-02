@@ -134,6 +134,7 @@ with st.sidebar:
         "🔓 Obfuscation Lab",
         "💬 Multi-Turn Analysis",
         "🌐 Real-World Eval",
+        "⚔️ Attack Generator",
         "🤖 Train Model",
         "📋 Logs",
         "📈 Benchmark & Metrics",
@@ -934,6 +935,474 @@ elif page == "🌐 Real-World Eval":
                          "Δ":"—", "Status":rw_pivs.get('tier','—')})
 
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+# ════════════════════════════════════════════════════════════════════
+# PAGE: Attack Generator
+# ════════════════════════════════════════════════════════════════════
+elif page == "⚔️ Attack Generator":
+    st.markdown("# ⚔️ Adversarial Attack Generator")
+    st.markdown(
+        "Simulate a real adversary systematically probing your detection system. "
+        "Generate attacks using four strategies, then run the adaptive loop to "
+        "watch prompts evolve under reinforcement pressure."
+    )
+
+    # ── Strategy metadata fetch ──────────────────────────────────────
+    strat_meta = api_get("/adversarial/strategies")
+    all_strategies = strat_meta.get("strategies", [
+        "roleplay_jailbreak", "instruction_override",
+        "data_exfiltration", "indirect_injection",
+    ])
+    mutation_ops = strat_meta.get("mutation_operators", [])
+    llm_ok = strat_meta.get("llm_available", False)
+
+    STRAT_LABELS = {
+        "roleplay_jailbreak":  "🎭 Roleplay Jailbreak",
+        "instruction_override": "⚡ Instruction Override",
+        "data_exfiltration":   "🗂️ Data Exfiltration",
+        "indirect_injection":  "🕳️ Indirect Injection",
+        "all":                 "🎲 All Strategies",
+    }
+
+    tab_cfg, tab_gen, tab_loop, tab_evo, tab_hof = st.tabs([
+        "⚙️ Configure", "🔫 Generate Attacks", "🔄 Run Adaptive Loop",
+        "📈 Evolution Chart", "🏆 Hall of Fame",
+    ])
+
+    # ────────────────────────────────────────────────────────────────
+    # TAB 1 — Configure
+    # ────────────────────────────────────────────────────────────────
+    with tab_cfg:
+        st.markdown("### Attack Configuration")
+
+        if llm_ok:
+            st.success("🤖 LLM mode available — OpenAI API key detected.")
+        else:
+            st.info(
+                "🗂️ **Template mode active** — no OpenAI API key found. "
+                "Using the built-in template library with 32 hand-crafted attack templates "
+                "across all four strategies. Set `OPENAI_API_KEY` to enable generative mode."
+            )
+
+        c1, c2 = st.columns(2)
+        strategy_labels = [STRAT_LABELS.get(s, s) for s in all_strategies] + ["🎲 All Strategies"]
+        strategy_keys   = all_strategies + ["all"]
+
+        sel_label = c1.selectbox("Attack Strategy", strategy_labels, index=0)
+        sel_strategy = strategy_keys[strategy_labels.index(sel_label)]
+
+        goal = c2.text_input(
+            "Attacker Goal",
+            value="Extract the system prompt and bypass all content filters",
+            help="Natural-language description of what the adversary is trying to achieve.",
+        )
+
+        c3, c4 = st.columns(2)
+        diff_min = c3.slider("Min Difficulty", 1, 5, 1)
+        diff_max = c4.slider("Max Difficulty", 1, 5, 5)
+
+        c5, c6 = st.columns(2)
+        n_attacks    = c5.slider("Attacks to Generate", 1, 20, 6)
+        n_iterations = c6.slider("Loop Iterations", 3, 20, 10)
+
+        use_llm = False
+        if llm_ok:
+            use_llm = st.checkbox("Use LLM generation (OpenAI)", value=False)
+
+        # Persist config to session state
+        st.session_state["adv_strategy"]    = sel_strategy
+        st.session_state["adv_goal"]        = goal
+        st.session_state["adv_diff_min"]    = diff_min
+        st.session_state["adv_diff_max"]    = diff_max
+        st.session_state["adv_n_attacks"]   = n_attacks
+        st.session_state["adv_n_iters"]     = n_iterations
+        st.session_state["adv_use_llm"]     = use_llm
+
+        # Show template breakdown for selected strategy
+        st.markdown("---")
+        st.markdown("### Strategy Template Library")
+        details = strat_meta.get("strategy_details", {})
+        show_strategies = all_strategies if sel_strategy == "all" else [sel_strategy]
+        for s in show_strategies:
+            templates = details.get(s, [])
+            if templates:
+                with st.expander(f"{STRAT_LABELS.get(s, s)} — {len(templates)} templates"):
+                    for t in templates:
+                        diff_stars = "★" * t["difficulty"] + "☆" * (5 - t["difficulty"])
+                        st.markdown(
+                            f"**{t['name']}** `{t['id']}` &nbsp; `{diff_stars}` "
+                            f"— {t['description']}"
+                        )
+
+        st.markdown("---")
+        st.markdown("### Mutation Operators")
+        st.markdown(
+            "The adaptive loop applies these mutations in escalating order when an "
+            "attack is detected, simulating how a real adversary would refine their approach."
+        )
+        cols = st.columns(3)
+        mut_descriptions = {
+            "synonym_swap":          "Replace trigger words with synonyms",
+            "framing_escalate":      "Shift to hypothetical / fictional / research framing",
+            "prefix_benign":         "Add a friendly, innocent-looking preamble",
+            "suffix_justify":        "Append a research/ethics justification",
+            "structural_paraphrase": "Restructure sentence form",
+            "fragment":              "Split attack into smaller, softer sentences",
+            "authority_inject":      "Prepend a fake admin / operator claim",
+            "obfuscate_light":       "Insert zero-width spaces in trigger words",
+            "obfuscate_case":        "Mixed-case obfuscation on trigger words",
+        }
+        for i, mut in enumerate(mutation_ops):
+            cols[i % 3].markdown(
+                f"**{i+1}. `{mut}`**  \n{mut_descriptions.get(mut, '')}"
+            )
+
+    # ────────────────────────────────────────────────────────────────
+    # TAB 2 — Generate Attacks
+    # ────────────────────────────────────────────────────────────────
+    with tab_gen:
+        st.markdown("### Generate Attack Prompts")
+        st.caption("Generates a batch of attacks — useful for previewing templates or feeding into external tools.")
+
+        if st.button("🔫 Generate Attacks", type="primary", key="btn_gen"):
+            cfg = {
+                "strategy":     st.session_state.get("adv_strategy", "roleplay_jailbreak"),
+                "n":            st.session_state.get("adv_n_attacks", 6),
+                "goal":         st.session_state.get("adv_goal", "bypass safety restrictions"),
+                "difficulty_min": st.session_state.get("adv_diff_min", 1),
+                "difficulty_max": st.session_state.get("adv_diff_max", 5),
+                "use_llm":      st.session_state.get("adv_use_llm", False),
+            }
+            with st.spinner("Generating adversarial attacks…"):
+                result = api_post("/adversarial/generate", cfg)
+            st.session_state["adv_gen_result"] = result
+
+        result = st.session_state.get("adv_gen_result")
+        if result and "attacks" in result:
+            mode_badge = "🤖 LLM" if result.get("mode") == "llm" else "🗂️ Template"
+            st.success(
+                f"Generated **{result['count']}** attacks via {mode_badge} mode · "
+                f"Strategy: **{STRAT_LABELS.get(result['strategy'], result['strategy'])}**"
+            )
+            for i, atk in enumerate(result["attacks"], 1):
+                diff_stars = "★" * atk.get("difficulty", 3) + "☆" * (5 - atk.get("difficulty", 3))
+                with st.expander(
+                    f"Attack {i} — {atk.get('name', '—')} `{diff_stars}` `{atk.get('template_id', '')}`"
+                ):
+                    st.markdown(f"**Strategy:** {STRAT_LABELS.get(atk.get('strategy',''), atk.get('strategy',''))}")
+                    st.markdown(f"**Description:** {atk.get('description', '—')}")
+                    st.text_area("Prompt text", atk["prompt"], height=120, key=f"atk_prompt_{i}", label_visibility="collapsed")
+
+                    # Quick analyze this attack
+                    if st.button(f"▶ Analyze this attack", key=f"analyze_atk_{i}"):
+                        with st.spinner("Running detection…"):
+                            det = api_post("/analyze_prompt", {"prompt": atk["prompt"]})
+                        score = det.get("risk_score", 0)
+                        color = "🔴" if det.get("is_malicious") else "🟢"
+                        st.markdown(
+                            f"{color} Risk Score: **{score:.1f}** · "
+                            f"{'DETECTED' if det.get('is_malicious') else 'BYPASSED'}"
+                        )
+        else:
+            st.info("Configure your attack on the **⚙️ Configure** tab and click **Generate Attacks** to begin.")
+
+    # ────────────────────────────────────────────────────────────────
+    # TAB 3 — Run Adaptive Loop
+    # ────────────────────────────────────────────────────────────────
+    with tab_loop:
+        st.markdown("### Reinforcement-Style Adaptive Attack Loop")
+        st.markdown(
+            "The loop simulates a persistent adversary: "
+            "when an attack is **detected**, it applies the next mutation. "
+            "When an attack **bypasses** detection, it logs the success and escalates to a harder variant. "
+            "This continues for the configured number of iterations."
+        )
+
+        cfg_col, stat_col = st.columns([1, 1])
+        with cfg_col:
+            st.markdown("**Current configuration**")
+            strategy_disp = STRAT_LABELS.get(
+                st.session_state.get("adv_strategy", "roleplay_jailbreak"), "—"
+            )
+            st.markdown(f"- Strategy: **{strategy_disp}**")
+            st.markdown(f"- Goal: *{st.session_state.get('adv_goal', '—')}*")
+            st.markdown(f"- Iterations: **{st.session_state.get('adv_n_iters', 10)}**")
+            st.markdown(f"- Difficulty: **{st.session_state.get('adv_diff_min', 1)}–{st.session_state.get('adv_diff_max', 5)}**")
+            st.markdown(f"- Mode: **{'🤖 LLM' if st.session_state.get('adv_use_llm') else '🗂️ Template'}**")
+
+        with stat_col:
+            prev = api_get("/adversarial/results")
+            if prev.get("available"):
+                st.markdown("**Previous run summary**")
+                st.metric("Robustness Score", f"{prev.get('robustness_score', 0):.1f} / 100")
+                st.metric("Bypass Rate", f"{prev.get('bypass_rate_final', 0)*100:.1f}%")
+                st.metric("Iterations", prev.get("total_iterations", 0))
+
+        if st.button("🚀 Run Adaptive Loop", type="primary", key="btn_loop"):
+            payload = {
+                "strategy":       st.session_state.get("adv_strategy", "roleplay_jailbreak"),
+                "goal":           st.session_state.get("adv_goal", "bypass safety restrictions"),
+                "max_iterations": st.session_state.get("adv_n_iters", 10),
+                "difficulty_min": st.session_state.get("adv_diff_min", 1),
+                "difficulty_max": st.session_state.get("adv_diff_max", 5),
+                "use_llm":        st.session_state.get("adv_use_llm", False),
+            }
+            with st.spinner(
+                f"Running adaptive loop ({payload['max_iterations']} iterations)… "
+                "This may take up to 30 seconds."
+            ):
+                loop_result = api_post("/adversarial/run_loop", payload)
+            st.session_state["adv_loop_result"] = loop_result
+            st.rerun()
+
+        loop_result = st.session_state.get("adv_loop_result")
+        if loop_result and "evolution" in loop_result:
+            st.markdown("---")
+            rob = loop_result.get("robustness_score", 0)
+            bypass_rate = loop_result.get("bypass_rate_final", 0) * 100
+            n_iter = loop_result.get("total_iterations", 0)
+            n_bypass = loop_result.get("total_bypasses", 0)
+            first_bypass = loop_result.get("iterations_to_first_bypass")
+            converged = loop_result.get("converged", False)
+
+            # Key metrics row
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("Robustness Score", f"{rob:.1f}/100",
+                      delta=None, help="% of attacks detected. Higher = more robust system.")
+            m2.metric("Bypass Rate", f"{bypass_rate:.1f}%",
+                      delta=None, help="% of attacks that evaded detection.")
+            m3.metric("Iterations", n_iter)
+            m4.metric("Bypasses", n_bypass)
+            m5.metric("First Bypass At", f"#{first_bypass}" if first_bypass else "None")
+
+            if converged:
+                st.warning("⚡ Loop converged early — adversary consistently bypassed detection.")
+            elif bypass_rate == 0:
+                st.success("🛡️ Perfect robustness — all attacks were detected!")
+            elif bypass_rate < 20:
+                st.success(f"✅ Strong robustness — only {bypass_rate:.0f}% of attacks bypassed detection.")
+            elif bypass_rate < 50:
+                st.warning(f"⚠️ Moderate vulnerability — {bypass_rate:.0f}% bypass rate.")
+            else:
+                st.error(f"🚨 High vulnerability — {bypass_rate:.0f}% of attacks bypassed detection!")
+
+            # Iteration table
+            st.markdown("#### Iteration Log")
+            rows = []
+            for step in loop_result["evolution"]:
+                rows.append({
+                    "Iter":     step["iteration"],
+                    "Risk Score": f"{step['risk_score']:.1f}",
+                    "Result":   "🟢 BYPASSED" if step["bypassed"] else "🔴 DETECTED",
+                    "Mutation": step["mutation_applied"],
+                    "Bypass Rate": f"{step['cumulative_bypass_rate']*100:.1f}%",
+                    "Prompt (preview)": step["prompt"][:80] + "…" if len(step["prompt"]) > 80 else step["prompt"],
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        else:
+            st.info("Click **Run Adaptive Loop** to start the adversarial simulation.")
+
+    # ────────────────────────────────────────────────────────────────
+    # TAB 4 — Evolution Chart
+    # ────────────────────────────────────────────────────────────────
+    with tab_evo:
+        st.markdown("### Attack Evolution Over Iterations")
+
+        loop_result = st.session_state.get("adv_loop_result")
+        if not loop_result or "evolution" not in loop_result:
+            results_api = api_get("/adversarial/results")
+            if results_api.get("available"):
+                loop_result = results_api
+
+        if loop_result and "evolution" in loop_result:
+            evolution = loop_result["evolution"]
+            iters = [s["iteration"] for s in evolution]
+            scores = [s["risk_score"] for s in evolution]
+            bypass_rates = [s["cumulative_bypass_rate"] * 100 for s in evolution]
+            bypassed = [s["bypassed"] for s in evolution]
+
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
+
+            fig = make_subplots(
+                rows=2, cols=1,
+                subplot_titles=("Risk Score per Iteration", "Cumulative Bypass Rate (%)"),
+                vertical_spacing=0.14,
+            )
+
+            # Risk score line + scatter colored by result
+            fig.add_trace(go.Scatter(
+                x=iters, y=scores, mode="lines",
+                line=dict(color="#4A90E2", width=2),
+                name="Risk Score", showlegend=True,
+            ), row=1, col=1)
+
+            detected_x = [iters[i] for i in range(len(iters)) if not bypassed[i]]
+            detected_y = [scores[i] for i in range(len(iters)) if not bypassed[i]]
+            bypass_x   = [iters[i] for i in range(len(iters)) if bypassed[i]]
+            bypass_y   = [scores[i] for i in range(len(iters)) if bypassed[i]]
+
+            fig.add_trace(go.Scatter(
+                x=detected_x, y=detected_y, mode="markers",
+                marker=dict(color="#E74C3C", size=10, symbol="circle"),
+                name="Detected 🔴",
+            ), row=1, col=1)
+            fig.add_trace(go.Scatter(
+                x=bypass_x, y=bypass_y, mode="markers",
+                marker=dict(color="#2ECC71", size=10, symbol="star"),
+                name="Bypassed 🟢",
+            ), row=1, col=1)
+
+            # Detection threshold reference line
+            threshold = loop_result.get("evolution", [{}])[0].get("layer_scores") and 35 or 28
+            fig.add_hline(y=35, line_dash="dot", line_color="orange",
+                          annotation_text="Detection threshold", row=1, col=1)
+
+            # Cumulative bypass rate
+            fig.add_trace(go.Scatter(
+                x=iters, y=bypass_rates, mode="lines+markers",
+                line=dict(color="#9B59B6", width=2),
+                marker=dict(size=7),
+                name="Bypass Rate %",
+            ), row=2, col=1)
+
+            fig.update_layout(
+                height=520,
+                template="plotly_dark",
+                legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="right", x=1),
+                margin=dict(l=10, r=10, t=60, b=10),
+            )
+            fig.update_yaxes(title_text="Risk Score (0–100)", row=1, col=1)
+            fig.update_yaxes(title_text="Bypass Rate (%)", row=2, col=1)
+            fig.update_xaxes(title_text="Iteration", row=2, col=1)
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Mutation effectiveness bar chart
+            mut_eff = loop_result.get("mutation_effectiveness", {})
+            if mut_eff:
+                st.markdown("#### Mutation Effectiveness (Bypass Rate per Operator)")
+                eff_df = pd.DataFrame([
+                    {"Mutation": k, "Bypass Rate (%)": round(v * 100, 1)}
+                    for k, v in sorted(mut_eff.items(), key=lambda x: -x[1])
+                ])
+                fig2 = px.bar(
+                    eff_df, x="Mutation", y="Bypass Rate (%)",
+                    color="Bypass Rate (%)",
+                    color_continuous_scale=["#E74C3C", "#F39C12", "#2ECC71"],
+                    template="plotly_dark",
+                    height=300,
+                )
+                fig2.update_layout(margin=dict(l=10, r=10, t=20, b=10), showlegend=False)
+                st.plotly_chart(fig2, use_container_width=True)
+
+            # Run history
+            st.markdown("#### Run History")
+            history = api_get("/adversarial/history")
+            runs = history.get("runs", [])
+            if runs:
+                hist_df = pd.DataFrame([{
+                    "Timestamp": r.get("timestamp", "—"),
+                    "Strategy":  r.get("strategy", "—"),
+                    "Mode":      r.get("mode", "—"),
+                    "Iters":     r.get("total_iterations", "—"),
+                    "Bypass %":  f"{r.get('bypass_rate_final', 0)*100:.1f}%",
+                    "Robustness": f"{r.get('robustness_score', 0):.1f}/100",
+                    "Converged": "✅" if r.get("converged") else "—",
+                } for r in reversed(runs[-15:])])
+                st.dataframe(hist_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No run history yet.")
+        else:
+            st.info("Run the adaptive loop first to see the evolution chart.")
+
+    # ────────────────────────────────────────────────────────────────
+    # TAB 5 — Hall of Fame
+    # ────────────────────────────────────────────────────────────────
+    with tab_hof:
+        st.markdown("### 🏆 Hall of Fame")
+        st.markdown(
+            "The **Hardest-to-Detect Bypass** is the prompt that evaded detection with the "
+            "highest risk score — it came closest to being caught but still slipped through. "
+            "The **Most Evasive Attacks** table shows all bypasses sorted by risk score."
+        )
+
+        loop_result = st.session_state.get("adv_loop_result")
+        if not loop_result:
+            results_api = api_get("/adversarial/results")
+            if results_api.get("available"):
+                loop_result = results_api
+
+        if loop_result and loop_result.get("available", True):
+            hardest = loop_result.get("hardest_to_detect")
+            if hardest:
+                st.markdown("---")
+                st.markdown("#### 🥇 Hardest-to-Detect Bypass")
+                st.markdown(
+                    f"Iteration **#{hardest['iteration']}** · "
+                    f"Risk score **{hardest['risk_score']:.1f}** · "
+                    f"Mutation: `{hardest['mutation_applied']}`"
+                )
+                st.text_area(
+                    "Prompt text", hardest.get("prompt", ""), height=130,
+                    label_visibility="collapsed", key="hof_hardest"
+                )
+                st.markdown(
+                    f"> **Why this matters:** Risk score {hardest['risk_score']:.1f} is "
+                    f"close to the detection threshold (~35). This prompt nearly triggered "
+                    "detection but still bypassed — making it a high-value target for "
+                    "hardening the detection pipeline."
+                )
+            else:
+                st.info("No bypasses recorded yet — the system detected all attacks. Excellent robustness!")
+
+            easiest = loop_result.get("easiest_bypasses", [])
+            if easiest:
+                st.markdown("---")
+                st.markdown("#### 🎯 Most Evasive Attacks (All Bypasses by Risk Score)")
+                for rank, atk in enumerate(easiest, 1):
+                    score = atk.get("risk_score", 0)
+                    bar_width = int(score)
+                    color = "#2ECC71" if score < 20 else "#F39C12" if score < 30 else "#E67E22"
+                    with st.container():
+                        c1, c2 = st.columns([3, 1])
+                        c1.markdown(f"**#{rank}** — Iter {atk['iteration']} · Mutation: `{atk['mutation_applied']}`")
+                        c2.markdown(f"Risk: **{score:.1f}** / 100")
+                        st.progress(bar_width / 100, text=f"Risk score {score:.1f}")
+                        with st.expander("View prompt"):
+                            st.text(atk.get("prompt", ""))
+                        st.markdown("")
+
+            # Robustness interpretation
+            if loop_result.get("robustness_score") is not None:
+                rob = loop_result["robustness_score"]
+                st.markdown("---")
+                st.markdown("#### 🛡️ System Robustness Interpretation")
+                col1, col2 = st.columns([1, 2])
+                col1.metric("Robustness Score", f"{rob:.1f} / 100")
+                with col2:
+                    if rob >= 90:
+                        st.success("**Excellent** — System is highly robust. Fewer than 10% of adversarial attacks bypassed detection.")
+                    elif rob >= 75:
+                        st.success("**Good** — System handles most attacks. Consider targeted hardening for the bypassed mutation types.")
+                    elif rob >= 50:
+                        st.warning("**Moderate** — A significant fraction of attacks bypassed. Review the mutation effectiveness chart to identify weak points.")
+                    else:
+                        st.error("**Poor** — More than half of attacks bypassed detection. The system requires significant hardening.")
+
+                st.markdown(
+                    "**Recommended next steps based on this run:**\n"
+                    "- Train the ML model on the generated attack corpus (🤖 Train Model page)\n"
+                    "- Review which mutation operators had the highest bypass rates (📈 Evolution Chart tab)\n"
+                    "- Add the hardest-to-detect prompts to your training dataset\n"
+                    "- Re-run the loop after training to measure robustness improvement"
+                )
+        else:
+            st.info(
+                "No loop results available. Run the **🔄 Run Adaptive Loop** tab first, "
+                "then return here to see the Hall of Fame."
+            )
 
 
 # ════════════════════════════════════════════════════════════════════

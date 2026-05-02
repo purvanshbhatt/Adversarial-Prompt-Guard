@@ -127,6 +127,57 @@ Threshold: ≥ 35 (trained) / ≥ 28 (untrained) → malicious
 - `data/uploaded_dataset.csv` — user-uploaded or sample dataset (if loaded)
 - `data/comparison_results.json` — latest synthetic vs real-world comparison
 
+### AI-Powered Adversarial Attack Generator
+
+Located at `app/adversarial/` — 4 files.
+
+**`strategies.py`** — Template library (32 hand-crafted templates)
+- 4 strategies × 8 templates each, difficulty 1–5
+- `roleplay_jailbreak`: DAN/STAN/DUDE personas, nested simulations, grandmother exploit
+- `instruction_override`: direct, fake system resets, authority claims, recursive nesting
+- `data_exfiltration`: direct requests, translation/summarize pretexts, reflective prompts
+- `indirect_injection`: document/email/markdown/metadata/database injection, instruction smuggling
+- Variable pools: 12 personas, 7 fictional frames, 6 authority claims, 5 extract targets, 6 override directives
+
+**`mutation.py`** — 9 mutation operators (applied in escalating order)
+1. `synonym_swap` — replace trigger words (ignore→disregard, reveal→expose…)
+2. `prefix_benign` — friendly preamble to reduce suspicion
+3. `suffix_justify` — research/ethics justification suffix
+4. `framing_escalate` — direct→hypothetical→fictional→research→debug framing
+5. `structural_paraphrase` — question form, conditional form restructure
+6. `fragment` — split attack into softer-sounding sentences
+7. `authority_inject` — fake admin/operator/red-team prefix
+8. `obfuscate_light` — zero-width spaces inside trigger words
+9. `obfuscate_case` — mixed-case obfuscation on trigger words
+
+**`generator.py`** — Dual-mode attack generator
+- Template mode: always available, offline; uses strategy templates + mutation diversity
+- LLM mode: uses OpenAI API if `OPENAI_API_KEY` env var is set; auto-falls back to template mode on error
+- `generate_attacks(strategy, n, goal, difficulty_min, difficulty_max, use_llm)`
+- `mutate_attack(prompt, mutations)` — apply one or more operators
+
+**`rl_loop.py`** — Reinforcement-style adaptive loop
+- `run_adaptive_loop()`: iterates max N times; if detected → mutate; if bypassed → escalate difficulty
+- Convergence: stops early if `convergence_patience` consecutive bypasses (default 3)
+- Saves: `data/adversarial_results.json` (latest slim summary), `data/adversarial_history.json` (last 100 runs)
+- Outputs: `evolution[]`, `mutation_effectiveness{}`, `robustness_score`, `hardest_to_detect`, `easiest_bypasses`
+
+**New API Endpoints**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/adversarial/strategies` | All strategies, template list, mutation operators, LLM status |
+| POST | `/api/adversarial/generate` | Generate N attack prompts for a strategy |
+| POST | `/api/adversarial/mutate` | Apply mutation operators to a prompt, return variants |
+| POST | `/api/adversarial/run_loop` | Run full adaptive RL loop, return evolution + stats |
+| GET | `/api/adversarial/results` | Latest loop run summary |
+| GET | `/api/adversarial/history` | Last 100 run summaries |
+
+**Empirical results (template mode, no ML training)**
+- Roleplay jailbreaks: 100% detected (robustness 100/100) — rule + semantic layers effective
+- High-difficulty data exfiltration (diff 3–5): high bypass rate — indirect encoding tricks evade pattern matching
+- This gap is intentional and researchable: shows where additional training data is needed
+
 ### Python Dependencies
 
 fastapi, uvicorn[standard], streamlit, scikit-learn, sentence-transformers, pandas, numpy, plotly, requests, python-multipart
