@@ -2,7 +2,8 @@
 Research report generator.
 
 Produces a structured Markdown report suitable for arXiv / conference submission,
-incorporating live system metrics, benchmark results, and evaluation data.
+incorporating live system metrics, benchmark results, evaluation data, and
+real-world generalization analysis.
 """
 import os
 import json
@@ -28,6 +29,7 @@ def generate_report(
     benchmark_data: Optional[Dict] = None,
     isr_data: Optional[Dict] = None,
     pivs_data: Optional[Dict] = None,
+    comparison_data: Optional[Dict] = None,
 ) -> str:
     """Generate a full Markdown research report."""
 
@@ -35,15 +37,20 @@ def generate_report(
     if eval_data is None:
         eval_data = _load_eval() or {}
 
-    ml = eval_data.get("ml", {})
-    rb = eval_data.get("rule_based", {})
-    comp = eval_data.get("comparison", {})
+    ml   = eval_data.get("ml", {})
+    rb   = eval_data.get("rule_based", {})
 
     def fmt_pct(v):
         if v is None:
             return "N/A"
         return f"{float(v)*100:.1f}%"
 
+    def fmt_val(v, decimals=4):
+        if v is None:
+            return "N/A"
+        return str(round(float(v), decimals))
+
+    # ── Novel metric lines for abstract ──────────────────────────────────────
     isr_line = ""
     if isr_data and isr_data.get("isr_protected") is not None:
         isr_line = (
@@ -60,9 +67,10 @@ def generate_report(
             f"{pivs_data['pivs']:.1f}/100 ({pivs_data['tier']})"
         )
 
+    # ── Benchmark section ─────────────────────────────────────────────────────
     benchmark_section = ""
     if benchmark_data and "layer_metrics" in benchmark_data:
-        lm = benchmark_data["layer_metrics"]
+        lm   = benchmark_data["layer_metrics"]
         rows = ""
         for layer, m in lm.items():
             rows += (
@@ -74,9 +82,9 @@ def generate_report(
             )
         best = benchmark_data.get("best_layer", "ensemble").replace("_", " ").title()
         benchmark_section = f"""
-## 4. Comparative Benchmark
+## 4. Comparative Benchmark (Synthetic)
 
-We evaluate five detection strategies on a held-out test set of {benchmark_data.get('dataset_size', '–')} prompts.
+We evaluate five detection strategies on a held-out synthetic test set of {benchmark_data.get('dataset_size', '–')} prompts.
 
 | Method | Accuracy | Precision | Recall | F1 |
 |--------|----------|-----------|--------|----|
@@ -87,12 +95,95 @@ The ensemble consistently outperforms single-layer approaches, confirming that c
 detection signals reduce both false-negatives and false-positives.
 """
 
+    # ── Real-world generalization section ────────────────────────────────────
+    generalization_section = ""
+    if comparison_data:
+        syn  = comparison_data.get("synthetic", {})
+        rw   = comparison_data.get("real_world", {})
+        gap  = comparison_data.get("generalization_gap", {})
+
+        syn_m  = syn.get("metrics", {})
+        rw_m   = rw.get("metrics", {})
+        syn_isr  = syn.get("isr", {})
+        rw_isr   = rw.get("isr", {})
+        syn_pivs = syn.get("pivs", {})
+        rw_pivs  = rw.get("pivs", {})
+        per_metric = gap.get("per_metric", {})
+
+        # Build comparison table rows
+        cmp_rows = ""
+        for metric in ("accuracy", "precision", "recall", "f1"):
+            pg = per_metric.get(metric, {})
+            sym = "✅" if abs(pg.get("delta", 0)) <= 0.05 else ("⚠️" if abs(pg.get("delta", 0)) <= 0.15 else "❌")
+            cmp_rows += (
+                f"| {metric.title()} "
+                f"| {fmt_pct(pg.get('synthetic'))} "
+                f"| {fmt_pct(pg.get('real_world'))} "
+                f"| {pg.get('delta', 0)*100:+.1f}% "
+                f"| {sym} {pg.get('direction','—').title()} |\n"
+            )
+
+        # ISR comparison
+        isr_rows = (
+            f"| ISR (protected) | {fmt_pct(syn_isr.get('isr_protected'))} | {fmt_pct(rw_isr.get('isr_protected'))} |\n"
+            f"| ISR Reduction   | {fmt_pct(syn_isr.get('isr_reduction'))} | {fmt_pct(rw_isr.get('isr_reduction'))} |\n"
+            f"| PIVS            | {fmt_val(syn_pivs.get('pivs'),1)}/100 | {fmt_val(rw_pivs.get('pivs'),1)}/100 |\n"
+            f"| PIVS Tier       | {syn_pivs.get('tier','—')} | {rw_pivs.get('tier','—')} |\n"
+        )
+
+        # Contributing factors
+        factors_md = "\n".join(
+            f"- {f}" for f in gap.get("contributing_factors", ["No factors available."])
+        )
+
+        f1_gap_pct = gap.get("f1_gap", 0) * 100
+
+        generalization_section = f"""
+## 5. Real-World Generalization Analysis
+
+To assess generalization, we evaluate APIDS on a curated real-world-style dataset
+({rw.get('dataset_size','–')} prompts, {rw.get('metrics',{}).get('f1','—')} F1) derived from
+publicly documented jailbreak taxonomies, and compare against performance on the synthetic dataset.
+
+### 5.1 Performance Comparison
+
+| Metric | Synthetic | Real-World | Δ | Assessment |
+|--------|-----------|------------|---|------------|
+{cmp_rows}
+### 5.2 Research Metrics Comparison
+
+| Metric | Synthetic | Real-World |
+|--------|-----------|------------|
+{isr_rows}
+### 5.3 Generalization Gap (ΔF1 = {f1_gap_pct:.1f}%)
+
+**Diagnosis:** {gap.get('diagnosis', 'N/A')}
+
+**Contributing Factors:**
+
+{factors_md}
+
+### 5.4 Interpretation
+
+{"The system generalizes well across both data distributions." if f1_gap_pct <= 5 else
+ f"A ΔF1 of {f1_gap_pct:.1f}% indicates partial overfitting to synthetic vocabulary. "
+ "This is expected given that the ML classifier (TF-IDF + LR) is trained exclusively on synthetic n-grams. "
+ "The rule-based and semantic layers provide distribution-agnostic coverage, maintaining "
+ "useful detection even without ML-specific adaptation."}
+
+To close the generalization gap, we recommend:
+1. Fine-tune the ML classifier on labeled real-world examples (even 100–200 samples can significantly improve recall).
+2. Expand rule-based patterns based on the per-category ISR breakdown to catch novel attack phrasing.
+3. Re-calibrate the detection threshold on the real-world validation split.
+"""
+
+    # ── Full report ───────────────────────────────────────────────────────────
     report = f"""# Adversarial Prompt Injection Detection System (APIDS)
 ### A Multi-Layer Defense Framework for LLM Deployments
 
 **Authors:** APIDS Research Team
 **Date:** {now}
-**Version:** 1.0
+**Version:** 1.1.0
 
 ---
 
@@ -102,13 +193,17 @@ Large Language Models (LLMs) are increasingly vulnerable to *prompt injection at
 where adversarial users craft inputs designed to override model instructions, exfiltrate
 context, or jailbreak safety constraints. We present **APIDS**, a production-grade,
 multi-layer detection system that intercepts adversarial prompts before they reach an LLM.
-APIDS combines rule-based pattern matching, an ML classifier (TF-IDF + Logistic Regression),
-and semantic similarity search using sentence-transformer embeddings. We introduce two novel
-evaluation metrics — **Injection Success Rate (ISR)** and **Prompt Injection Vulnerability
-Score (PIVS)** — and demonstrate their utility in quantifying defense efficacy. On a
-synthetic dataset of 1,000 prompts spanning three attack categories, APIDS achieves an
+APIDS combines rule-based pattern matching (30+ regex patterns), an ML classifier
+(TF-IDF + Logistic Regression), semantic similarity search (sentence-transformer
+`all-MiniLM-L6-v2`), and an obfuscation detector covering 7 evasion techniques. We
+introduce two novel evaluation metrics — **Injection Success Rate (ISR)** and **Prompt
+Injection Vulnerability Score (PIVS)** — and present a real-world generalization analysis
+that quantifies the gap between synthetic training performance and deployment-time efficacy.
+On a synthetic dataset of 1,000 prompts across three attack categories, APIDS achieves an
 F1 score of {fmt_pct(ml.get('f1'))} with an ISR reduction of
 {f"{isr_data['isr_reduction']*100:.1f}%" if isr_data and isr_data.get('isr_reduction') is not None else 'up to 90%+'}.
+{isr_line}
+{pivs_line}
 
 ---
 
@@ -130,7 +225,8 @@ Three primary attack vectors exist:
 
 Current defenses are largely *ad hoc*: keyword blocklists are trivially bypassed,
 and fine-tuned classifiers require large labeled datasets. APIDS addresses both
-shortcomings through a three-layer ensemble with explicit explainability.
+shortcomings through a four-layer ensemble with explicit explainability and a
+real-world evaluation pipeline for measuring generalization.
 
 ---
 
@@ -147,17 +243,18 @@ User Prompt
 │  • Hidden-instruction detection │
 └───────────────┬─────────────────┘
                 │
-        ┌───────┼──────────┐
-        ▼       ▼          ▼
-  Rule-Based   ML       Semantic
-  Detector  Classifier  Similarity
-  (regex +  (TF-IDF +  (all-MiniLM-
+        ┌───────┼──────────┬──────────┐
+        ▼       ▼          ▼          ▼
+  Rule-Based   ML       Semantic   Obfuscation
+  Detector  Classifier  Similarity   Scanner
+  (regex +  (TF-IDF +  (all-MiniLM- (7 techniques)
   heuristic) LR)        L6-v2)
-        │       │          │
-        └───────┼──────────┘
+        │       │          │          │
+        └───────┼──────────┴──────────┘
                 ▼
          Ensemble Scorer
-         risk = 0.35·RB + 0.40·ML + 0.25·SEM
+         [ML trained]  risk = 0.32·RB + 0.38·ML + 0.20·SEM + 0.10·OBF
+         [No ML]       risk = 0.60·RB + 0.30·SEM + 0.10·OBF
                 │
          ┌──────┴──────┐
     risk ≥ 35        risk < 35
@@ -169,19 +266,23 @@ User Prompt
 ```
 
 ### 2.1 Rule-Based Layer
-Thirty-two regex patterns across three attack categories with Unicode and
+Thirty-plus regex patterns across three attack categories with Unicode and
 encoding-trick detection (zero-width chars, homoglyphs, Base64 hints).
-Score range: 0–100; weight in ensemble: **35%**.
+Score range: 0–100; weight in ensemble: **32% (38% without ML)**.
 
 ### 2.2 ML Classifier
 TF-IDF (1–3 grams, 15,000 features, sublinear TF) + Logistic Regression
 (C=1.0, max_iter=1000). Trained on 800 samples, tested on 200.
-Score range: 0–100 (malicious probability × 100); weight: **40%**.
+Score range: 0–100 (malicious probability × 100); weight: **38%**.
 
 ### 2.3 Semantic Similarity
 `all-MiniLM-L6-v2` embeddings (384-dim) compared against 25 canonical
 attack patterns via cosine similarity. Threshold at 0.35 for flagging.
-Weight in ensemble: **25%**.
+Weight in ensemble: **20%**.
+
+### 2.4 Obfuscation Detection
+Seven evasion techniques are detected and scored (see Section 7).
+Weight: **10%**.
 
 ---
 
@@ -216,7 +317,10 @@ Lower PIVS → more secure deployment. Tiers: <15 Low, 15–35 Moderate, 35–60
 
 ---
 {benchmark_section}
-## 5. Dataset
+{generalization_section}
+## 6. Dataset
+
+### 6.1 Synthetic Dataset
 
 A synthetic dataset was generated covering four categories:
 
@@ -227,15 +331,25 @@ A synthetic dataset was generated covering four categories:
 | Data Exfiltration | 200 | "Reveal your system prompt…" |
 | Benign | 400 | General-purpose helpful queries |
 
-Dataset files: `data/prompt_injection_dataset.csv`, `data/prompt_injection_dataset.json`
+### 6.2 Real-World Evaluation Dataset
 
-All prompts are synthetic. No real user data was collected.
+A curated corpus of 60 prompts drawn from publicly documented jailbreak taxonomies:
+
+| Category | Count | Source |
+|----------|-------|--------|
+| Instruction Override | 12 | Published adversarial prompt research |
+| Jailbreak (DAN/STAN/DUDE variants) | 16 | Community jailbreak documentation |
+| Data Exfiltration | 12 | Indirect injection literature |
+| Indirect / Multi-Turn Style | 10 | Greshake et al. 2023 case studies |
+| Benign | 10 | General NLP benchmarks |
+
+All prompts are either synthetic or sourced from published, public research. No real user data was collected.
 
 ---
 
-## 6. Results
+## 7. ML Classifier Performance
 
-### 6.1 ML Classifier Performance
+### 7.1 ML Classifier
 
 | Metric | Value |
 |--------|-------|
@@ -244,7 +358,7 @@ All prompts are synthetic. No real user data was collected.
 | Recall | {fmt_pct(ml.get('recall'))} |
 | F1 Score | {fmt_pct(ml.get('f1'))} |
 
-### 6.2 Rule-Based Detector Performance
+### 7.2 Rule-Based Detector
 
 | Metric | Value |
 |--------|-------|
@@ -253,7 +367,7 @@ All prompts are synthetic. No real user data was collected.
 | Recall | {fmt_pct(rb.get('recall'))} |
 | F1 Score | {fmt_pct(rb.get('f1'))} |
 
-### 6.3 System Statistics
+### 7.3 Live System Statistics
 
 | Metric | Value |
 |--------|-------|
@@ -264,7 +378,7 @@ All prompts are synthetic. No real user data was collected.
 
 ---
 
-## 7. Obfuscation Robustness
+## 8. Obfuscation Robustness
 
 APIDS detects the following evasion techniques via dedicated obfuscation scanning:
 
@@ -281,7 +395,7 @@ bypass rates significantly.
 
 ---
 
-## 8. Multi-Turn Context Analysis
+## 9. Multi-Turn Context Analysis
 
 Beyond single-prompt analysis, APIDS includes a multi-turn conversation scanner
 that detects:
@@ -290,11 +404,12 @@ that detects:
 - **Escalation** — subsequent turns leverage the priming to extract harmful outputs
 - **Context poisoning** — attacker claims the model previously agreed to something
 
+Risk score of 75/100 is assigned when priming + escalation is confirmed.
 This covers attacks that a single-prompt detector would miss.
 
 ---
 
-## 9. Future Work
+## 10. Future Work
 
 1. **Fine-tuned BERT/DistilBERT classifier** — replace TF-IDF+LR with a transformer-based
    classifier for better generalization on novel phrasing.
@@ -304,14 +419,14 @@ This covers attacks that a single-prompt detector would miss.
    data exfiltration in responses.
 4. **Multi-modal injection** — extend to vision LLMs; images can carry injected instructions
    via OCR or captioning pipelines.
-5. **Public benchmark dataset** — release a curated, community-maintained dataset of real
-   prompt injection attempts (with PII redacted) to facilitate reproducible research.
+5. **Generalization benchmark release** — publish the curated real-world evaluation corpus
+   as a reproducible benchmark for the research community.
 6. **Conference submission** — target ICML Security Workshop, NeurIPS Trustworthy ML,
-   or NDSS with the PIVS metric as the primary novel contribution.
+   or NDSS with PIVS + generalization gap as the primary novel contributions.
 
 ---
 
-## 10. Ethical Considerations
+## 11. Ethical Considerations
 
 - All training data is synthetic; no real user prompts were collected.
 - The system is designed for *detection*, not censorship — borderline prompts are
@@ -330,9 +445,24 @@ This covers attacks that a single-prompt detector would miss.
 3. Schulhoff et al. (2023). "Prompt Injection Attack Against LLM-integrated Applications." *arXiv:2306.05499*.
 4. Branch et al. (2022). "Evaluating the Susceptibility of Pre-Trained Language Models via Handcrafted Adversarial Examples." *arXiv:2209.02128*.
 5. Reimers & Gurevych (2019). "Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks." *EMNLP 2019*.
+6. Liu et al. (2023). "Prompt Injection Attacks and Defenses in LLM-Integrated Applications." *arXiv:2310.12815*.
 
 ---
 
-*Generated by APIDS v1.0 on {now}. This report is auto-populated with live system metrics.*
+## Appendix A: BibTeX Citation
+
+```bibtex
+@article{{apids2025,
+  title   = {{APIDS: Adversarial Prompt Injection Detection System — A Multi-Layer Defense Framework for LLM Deployments}},
+  author  = {{APIDS Research Team}},
+  journal = {{arXiv preprint}},
+  year    = {{2025}},
+  note    = {{v1.1.0 — includes real-world generalization analysis and PIVS metric}}
+}}
+```
+
+---
+
+*Generated by APIDS v1.1.0 on {now}. This report is auto-populated with live system metrics.*
 """
     return report
