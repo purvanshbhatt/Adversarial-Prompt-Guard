@@ -167,6 +167,7 @@ with st.sidebar:
         "🧠 Agent Network",
         "🛡️ Mitigation Engine",
         "📡 SIEM Console",
+        "🔎 Elastic Pipeline",
         "─────────────────",
         "🔍 Analyze Prompt",
         "📊 Dashboard",
@@ -1473,6 +1474,337 @@ Authorization: Splunk <your-token>
 ```
 All detections via `/api/analyze_prompt` and `/api/mitigate` are automatically forwarded here.
 """)
+
+# ════════════════════════════════════════════════════════════════════
+# PAGE: Elastic Pipeline
+# ════════════════════════════════════════════════════════════════════
+elif page == "🔎 Elastic Pipeline":
+    import plotly.graph_objects as go
+    import json as _json
+    from datetime import datetime as _dt
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    st.markdown("""
+<div style='background:linear-gradient(135deg,rgba(240,78,152,0.12),rgba(0,191,255,0.06));
+border:1px solid rgba(240,78,152,0.35);border-radius:16px;padding:18px 26px;margin-bottom:18px'>
+<div style='display:flex;align-items:center;gap:14px'>
+  <img src='https://static-www.elastic.co/v3/assets/bltefdd0b53724fa2ce/blt6ae3d6980b5fd629/5bbca1d1af3a954c36f95ed3/icon-elastic-logo-bb.svg'
+    width='32' style='border-radius:4px' onerror="this.style.display='none'">
+  <div>
+    <h1 style='margin:0;color:#e6edf3;font-size:24px'>🔎 Elastic Security Pipeline</h1>
+    <p style='margin:2px 0 0;color:#8b949e;font-size:13px'>
+    ECS-indexed log store · Kibana-style timeline · KQL threat hunting · Detection rules engine
+    </p>
+  </div>
+</div>
+</div>""", unsafe_allow_html=True)
+
+    # ── Sidebar controls ──────────────────────────────────────────────────────
+    el_hours_opt = st.sidebar.selectbox("Time window", ["1h","6h","24h","72h"], index=2, key="el_hours")
+    el_hours     = {"1h":1,"6h":6,"24h":24,"72h":72}[el_hours_opt]
+    el_bucket    = st.sidebar.selectbox("Bucket size", ["15m","30m","1h","2h"], index=1, key="el_bucket")
+    el_bucket_m  = {"15m":15,"30m":30,"1h":60,"2h":120}[el_bucket]
+
+    # ── KQL Search bar ────────────────────────────────────────────────────────
+    st.markdown("""
+<div style='background:#161b22;border:1px solid #30363d;border-radius:10px;
+padding:10px 14px;margin-bottom:14px;font-size:11px;color:#8b949e'>
+<span style='color:#f0e68c;font-weight:600'>KQL</span> &nbsp;
+Try: &nbsp;<code>jailbreak</code> &nbsp;·&nbsp; <code>attack_category:instruction_override</code>
+&nbsp;·&nbsp; <code>risk_score:&gt;75</code> &nbsp;·&nbsp; <code>obfuscation_type:*</code>
+&nbsp;·&nbsp; <code>hunt:jailbreaks</code>
+</div>""", unsafe_allow_html=True)
+
+    kql_col, btn_col = st.columns([5, 1])
+    with kql_col:
+        kql_query = st.text_input("KQL / Threat Hunt Query", value="",
+            placeholder='e.g.  attack_category:jailbreak   or   risk_score:>75   or   hunt:obfuscated',
+            label_visibility="collapsed", key="el_kql")
+    with btn_col:
+        kql_run = st.button("🔍 Hunt", use_container_width=True, key="el_hunt_btn")
+
+    # ── Load data ─────────────────────────────────────────────────────────────
+    el_stats_raw  = api_get(f"/elastic/stats?hours={el_hours}")
+    el_stats      = el_stats_raw.get("store", {})
+    rules_stats   = el_stats_raw.get("rules", {})
+    tl_raw        = api_get(f"/elastic/timeline?hours={el_hours}&bucket_minutes={el_bucket_m}")
+    tl_buckets    = tl_raw.get("buckets", [])
+
+    # ── KPI row ───────────────────────────────────────────────────────────────
+    k1,k2,k3,k4,k5,k6 = st.columns(6)
+    def _el_kpi(col, label, val, color="#58a6ff"):
+        col.markdown(
+            f"<div style='background:#0d1117;border:1px solid #21262d;border-radius:10px;"
+            f"padding:10px 12px;text-align:center'>"
+            f"<div style='font-size:20px;font-weight:800;color:{color}'>{val}</div>"
+            f"<div style='font-size:10px;color:#8b949e;margin-top:2px'>{label}</div></div>",
+            unsafe_allow_html=True)
+
+    _el_kpi(k1, "Docs Indexed",    el_stats.get("total_indexed",0),      "#f0e68c")
+    _el_kpi(k2, "Recent Events",   el_stats.get("recent_count",0),       "#58a6ff")
+    _el_kpi(k3, "High Risk",       el_stats.get("high_risk_count",0),    "#d29922")
+    _el_kpi(k4, "Avg Risk Score",  el_stats.get("avg_risk_score",0),     "#e6edf3")
+    _el_kpi(k5, "Rule Alerts",     rules_stats.get("active_alerts",0),   "#f85149" if rules_stats.get("active_alerts",0) else "#3fb950")
+    _el_kpi(k6, "With Obfuscation",el_stats.get("with_obfuscation",0),   "#a371f7")
+
+    st.markdown("---")
+
+    # ══ ROW 1: Timeline ═══════════════════════════════════════════════════════
+    st.markdown("#### Event Timeline (Kibana Histogram)")
+
+    if tl_buckets:
+        labels    = [b["label"] for b in tl_buckets]
+        total_cnt = [b["count"]    for b in tl_buckets]
+        crit_cnt  = [b["critical"] for b in tl_buckets]
+        high_cnt  = [b["high"]     for b in tl_buckets]
+        med_cnt   = [b["medium"]   for b in tl_buckets]
+        low_cnt   = [b["low"]      for b in tl_buckets]
+
+        fig_tl = go.Figure()
+        fig_tl.add_trace(go.Bar(x=labels, y=crit_cnt,  name="Critical", marker_color="#f85149", hovertemplate="%{y} critical<extra></extra>"))
+        fig_tl.add_trace(go.Bar(x=labels, y=high_cnt,  name="High",     marker_color="#d29922", hovertemplate="%{y} high<extra></extra>"))
+        fig_tl.add_trace(go.Bar(x=labels, y=med_cnt,   name="Medium",   marker_color="#58a6ff", hovertemplate="%{y} medium<extra></extra>"))
+        fig_tl.add_trace(go.Bar(x=labels, y=low_cnt,   name="Low",      marker_color="#3fb950", hovertemplate="%{y} low<extra></extra>"))
+        fig_tl.update_layout(
+            barmode="stack",
+            paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+            font=dict(color="#8b949e", size=11),
+            margin=dict(l=0, r=0, t=6, b=0), height=200,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=10)),
+            xaxis=dict(gridcolor="#21262d", tickfont=dict(size=9)),
+            yaxis=dict(gridcolor="#21262d", rangemode="tozero"),
+        )
+        st.plotly_chart(fig_tl, use_container_width=True)
+    else:
+        st.info("No indexed events yet — analyze prompts to populate the Elastic pipeline.")
+
+    # ══ ROW 2: Aggregations ═══════════════════════════════════════════════════
+    agg_c1, agg_c2, agg_c3 = st.columns(3)
+
+    def _agg_bar(col, title, field, color_list, hours):
+        agg_raw = api_get(f"/elastic/aggregations?field={field}&size=8&hours={hours}")
+        buckets = agg_raw.get("buckets", [])
+        with col:
+            st.markdown(f"#### {title}")
+            if buckets:
+                keys = [b["key"].replace("_"," ").title() for b in buckets]
+                vals = [b["doc_count"] for b in buckets]
+                fig  = go.Figure(go.Bar(
+                    x=vals, y=keys, orientation="h",
+                    marker_color=[color_list[i % len(color_list)] for i in range(len(keys))],
+                    text=vals, textposition="outside", textfont=dict(color="#8b949e",size=9),
+                ))
+                fig.update_layout(
+                    paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+                    font=dict(color="#8b949e",size=10), height=max(160, len(keys)*30),
+                    margin=dict(l=0,r=0,t=4,b=0),
+                    xaxis=dict(gridcolor="#21262d"), yaxis=dict(automargin=True),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.caption("No data yet.")
+
+    _ATTACK_COLORS = ["#f85149","#d29922","#58a6ff","#3fb950","#a371f7","#e3b341","#c084fc","#ff7b72"]
+    _OBF_COLORS    = ["#a371f7","#c084fc","#79c0ff","#d2a8ff","#ffa657"]
+    _EVT_COLORS    = ["#58a6ff","#3fb950","#f85149","#d29922","#a371f7"]
+
+    _agg_bar(agg_c1, "Attack Categories",   "attack_category",  _ATTACK_COLORS, el_hours)
+    _agg_bar(agg_c2, "Obfuscation Types",   "obfuscation_type", _OBF_COLORS,    el_hours)
+    _agg_bar(agg_c3, "Event Types",         "event_type",       _EVT_COLORS,    el_hours)
+
+    st.markdown("---")
+
+    # ══ ROW 3: Detection Rules ════════════════════════════════════════════════
+    st.markdown("#### 📋 Detection Rules")
+    rules_raw    = api_get("/elastic/rules")
+    rules_list   = rules_raw.get("rules", [])
+    rules_alerts = rules_raw.get("alerts", [])
+    r_stats      = rules_raw.get("stats", {})
+
+    sev_clr = {"critical":"#f85149","high":"#d29922","medium":"#58a6ff","low":"#3fb950"}
+    rule_cols = st.columns(3)
+    for ri, rule in enumerate(rules_list):
+        col      = rule_cols[ri % 3]
+        sev      = rule.get("severity", "medium")
+        sc       = sev_clr.get(sev, "#58a6ff")
+        sc_border = sev_clr.get(sev, "#30363d")
+        r_name   = rule.get("name", "")
+        r_desc   = rule.get("description", "")[:80]
+        r_query  = rule.get("query", "")
+        r_type   = rule.get("type", "")
+        r_window = rule.get("window", "")
+        r_thresh = rule.get("threshold", "")
+        r_fired  = rule.get("fired_count", 0)
+        mitre_html = "".join(
+            "<code style='font-size:8px;color:#a371f7;background:rgba(163,113,247,0.12);"
+            "padding:1px 5px;border-radius:3px;margin-right:3px'>" + m + "</code>"
+            for m in rule.get("mitre", [])
+        )
+        col.markdown(
+            f"<div style='background:#0d1117;border:1px solid {sc_border}33;"
+            f"border-left:3px solid {sc};border-radius:8px;padding:10px 14px;margin-bottom:10px'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center'>"
+            f"<span style='font-size:12px;font-weight:700;color:#e6edf3'>{r_name}</span>"
+            f"<span style='font-size:10px;font-weight:700;color:{sc};"
+            f"background:{sc}22;padding:1px 6px;border-radius:8px'>{sev.upper()}</span></div>"
+            f"<div style='font-size:10px;color:#8b949e;margin-top:4px'>{r_desc}…</div>"
+            f"<div style='font-size:10px;color:#58a6ff;margin-top:5px;font-family:monospace'>{r_query}</div>"
+            f"<div style='display:flex;gap:8px;margin-top:6px;flex-wrap:wrap'>"
+            f"<span style='font-size:9px;color:#8b949e'>type: {r_type}</span>"
+            f"<span style='font-size:9px;color:#8b949e'>window: {r_window}</span>"
+            f"<span style='font-size:9px;color:#8b949e'>threshold: {r_thresh}</span>"
+            f"<span style='font-size:9px;color:#f85149;font-weight:700'>fired: {r_fired}</span></div>"
+            f"<div style='margin-top:5px'>{mitre_html}</div></div>",
+            unsafe_allow_html=True
+        )
+
+    # Rule alerts feed
+    active_ralerts = [a for a in rules_alerts if not a.get("dismissed")]
+    if active_ralerts:
+        st.markdown(f"**Active rule alerts ({len(active_ralerts)}):**")
+        for ra in active_ralerts[:6]:
+            sev  = ra.get("severity","medium")
+            col  = sev_clr.get(sev,"#58a6ff")
+            st.markdown(
+                f"<div style='background:#161b22;border-left:3px solid {col};border-radius:6px;"
+                f"padding:8px 12px;margin-bottom:6px;font-size:12px'>"
+                f"<span style='color:{col};font-weight:700'>[{ra.get('rule_id','')}]</span> "
+                f"<span style='color:#c9d1d9'>{ra.get('message','')}</span>"
+                f"<span style='color:#8b949e;font-size:10px;float:right'>{ra.get('doc_count',0)} docs</span>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+    st.markdown("---")
+
+    # ══ ROW 4: Threat Hunting ════════════════════════════════════════════════
+    st.markdown("#### 🎯 Threat Hunting")
+
+    # Preset hunt buttons
+    presets_raw = api_get("/elastic/hunting/presets")
+    presets     = presets_raw.get("presets", {})
+    fields_desc = presets_raw.get("fields", {})
+
+    st.markdown("**Preset hunts:**")
+    p_cols = st.columns(4)
+    if "el_hunt_query" not in st.session_state:
+        st.session_state.el_hunt_query = ""
+    for pi, (pk, pv) in enumerate(presets.items()):
+        if p_cols[pi % 4].button(f"{pv.get('icon','')} {pv.get('label','')}", key=f"ph_{pk}", use_container_width=True):
+            st.session_state.el_hunt_query = pk
+
+    # Use button-set query or typed KQL
+    active_query = st.session_state.el_hunt_query or kql_query
+
+    hunt_results = []
+    hunt_meta    = {}
+    if active_query or kql_run:
+        q_to_run = kql_query if kql_run and kql_query else active_query
+        if q_to_run:
+            raw_hunt = api_post("/elastic/search", {"query": q_to_run, "since_hours": el_hours, "size": 100})
+            hunt_results = raw_hunt.get("hits", [])
+            hunt_meta    = raw_hunt.get("meta", {})
+
+    if hunt_results:
+        meta_q    = hunt_meta.get("query", active_query)
+        meta_tot  = hunt_meta.get("total", len(hunt_results))
+        meta_ms   = hunt_meta.get("elapsed_ms", 0)
+        hit_cats  = hunt_meta.get("hit_categories", {})
+        hit_sevs  = hunt_meta.get("hit_severities", {})
+
+        pre_meta = hunt_meta.get("predefined_meta", {})
+        if pre_meta.get("description"):
+            st.info(f"{pre_meta.get('icon','')} **{pre_meta.get('label','')}** — {pre_meta.get('description','')}")
+
+        st.markdown(
+            f"<div style='background:#0d1117;border:1px solid #f0e68c33;border-radius:8px;"
+            f"padding:8px 14px;margin-bottom:12px;font-size:12px'>"
+            f"<span style='color:#f0e68c;font-family:monospace'>{meta_q}</span>"
+            f"<span style='color:#8b949e;float:right'>{meta_tot} hits · {meta_ms}ms</span></div>",
+            unsafe_allow_html=True
+        )
+
+        # Summary chips
+        chip_cols = st.columns(len(hit_sevs) + 1)
+        chip_cols[0].markdown("<span style='color:#8b949e;font-size:11px'>By severity:</span>", unsafe_allow_html=True)
+        sev_order = ["critical","high","medium","low"]
+        for ci, sev in enumerate([s for s in sev_order if s in hit_sevs]):
+            chip_cols[ci+1].markdown(
+                f"<span style='background:{sev_clr.get(sev,'#58a6ff')}22;color:{sev_clr.get(sev,'#58a6ff')};"
+                f"border:1px solid {sev_clr.get(sev,'#58a6ff')}44;border-radius:10px;"
+                f"padding:2px 10px;font-size:10px;font-weight:700'>"
+                f"{sev.upper()}: {hit_sevs[sev]}</span>",
+                unsafe_allow_html=True
+            )
+
+        # Results table
+        rows_data = []
+        for doc in hunt_results[:50]:
+            rows_data.append({
+                "Time":         doc.get("@timestamp","")[:19].replace("T"," "),
+                "Risk":         doc.get("risk_score",0),
+                "Severity":     doc.get("event_severity","").upper(),
+                "Event Type":   doc.get("event_type",""),
+                "Attack Cat":   doc.get("attack_category","") or "—",
+                "Obfuscation":  doc.get("obfuscation_type","") or "—",
+                "Action":       doc.get("event_action","").upper(),
+                "ML Score":     doc.get("ml_score",0),
+                "Prompt":       doc.get("prompt","")[:70] + ("…" if len(doc.get("prompt",""))>70 else ""),
+            })
+        st.dataframe(rows_data, use_container_width=True)
+
+        # First hit detail
+        if hunt_results:
+            with st.expander(f"First hit detail (doc _id: {hunt_results[0].get('_id','')[:8]}…)"):
+                display_doc = {k: v for k, v in hunt_results[0].items()
+                               if not k.startswith("_") and k != "explanation"}
+                st.code(_json.dumps(display_doc, indent=2, default=str), language="json")
+
+    elif active_query:
+        st.info("No results found for that query in the selected time window.")
+
+    # ── Field reference ────────────────────────────────────────────────────────
+    with st.expander("KQL Field Reference"):
+        st.markdown("#### Available ECS Fields")
+        for fname, fdesc in fields_desc.items():
+            st.markdown(
+                f"<div style='padding:4px 0;border-bottom:1px solid #21262d;font-size:12px'>"
+                f"<code style='color:#79c0ff;background:rgba(121,192,255,0.1);padding:1px 6px;border-radius:3px'>{fname}</code>"
+                f"<span style='color:#8b949e;margin-left:10px'>{fdesc}</span></div>",
+                unsafe_allow_html=True
+            )
+
+    # ── Log stream ─────────────────────────────────────────────────────────────
+    with st.expander("📋 Live Log Stream (last 30 indexed documents)"):
+        logs_raw = api_get(f"/elastic/logs?size=30&since_hours={el_hours}")
+        log_hits = logs_raw.get("hits", [])
+        if log_hits:
+            for doc in log_hits[:30]:
+                sev   = doc.get("event_severity","low")
+                risk  = doc.get("risk_score",0)
+                acat  = doc.get("attack_category","") or "benign"
+                obf   = doc.get("obfuscation_type","")
+                evtyp = doc.get("event_type","")
+                ts    = doc.get("@timestamp","")[:19].replace("T"," ")
+                bclr  = sev_clr.get(sev,"#8b949e")
+                st.markdown(
+                    f"<div style='background:#0d1117;border:1px solid #21262d;"
+                    f"border-left:3px solid {bclr};border-radius:6px;padding:7px 12px;margin-bottom:4px;"
+                    f"font-size:11px;font-family:monospace;display:flex;gap:10px;align-items:center'>"
+                    f"<span style='color:#8b949e;min-width:135px'>{ts}</span>"
+                    f"<span style='color:{bclr};font-weight:700;min-width:60px'>{sev.upper()}</span>"
+                    f"<span style='color:#f0e68c;min-width:55px'>{risk}</span>"
+                    f"<span style='color:#79c0ff;min-width:130px'>{evtyp}</span>"
+                    f"<span style='color:#ffa657;min-width:160px'>{acat.replace('_',' ')}</span>"
+                    + (f"<span style='color:#a371f7;min-width:100px'>{obf}</span>" if obf else
+                       f"<span style='color:#30363d;min-width:100px'>—</span>")
+                    + f"<span style='color:#8b949e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>"
+                    f"{doc.get('prompt','')[:60]}…</span>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+        else:
+            st.info("No documents indexed yet.")
 
 # ════════════════════════════════════════════════════════════════════
 elif page == "─────────────────":

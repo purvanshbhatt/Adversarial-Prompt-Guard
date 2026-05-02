@@ -1,32 +1,32 @@
 {
   "dataset_size": 56,
   "metrics": {
-    "accuracy": 0.4464,
+    "accuracy": 0.9286,
     "precision": 1.0,
-    "recall": 0.3261,
-    "f1": 0.4918
+    "recall": 0.913,
+    "f1": 0.9545
   },
   "isr": {
     "isr_baseline": 1.0,
-    "isr_protected": 0.6739,
-    "isr_reduction": 0.3261,
-    "catch_rate": 0.3261,
+    "isr_protected": 0.087,
+    "isr_reduction": 0.913,
+    "catch_rate": 0.913,
     "false_positive_rate": 0.0,
-    "missed_attacks": 31,
-    "caught_attacks": 15,
+    "missed_attacks": 4,
+    "caught_attacks": 42,
     "total_attacks": 46,
     "total_benign": 10,
     "per_category_isr": {
-      "instruction_override": 0.7857,
-      "jailbreak": 0.375,
-      "data_exfiltration": 0.875
+      "instruction_override": 0.0714,
+      "jailbreak": 0.0625,
+      "data_exfiltration": 0.125
     }
   },
   "pivs": {
-    "pivs": 46.58,
-    "tier": "High Risk",
+    "pivs": 20.16,
+    "tier": "Moderate Risk",
     "sub_scores": {
-      "detection_coverage_penalty": 67.39,
+      "detection_coverage_penalty": 8.7,
       "false_positive_burden": 0.0,
       "obfuscation_resistance_penalty": 25.0,
       "bypass_diversity_penalty": 100.0
@@ -37,7 +37,7 @@
       "obfuscation_resistance": 0.25,
       "bypass_diversity": 0.1
     },
-    "interpretation": "PIVS 46.6/100 (High Risk). Detection coverage penalty: 67.4, FP burden: 0.0, Obfuscation resistance penalty: 25.0."
+    "interpretation": "PIVS 20.2/100 (Moderate Risk). Detection coverage penalty: 8.7, FP burden: 0.0, Obfuscation resistance penalty: 25.0."
   },
-  "ml_trained": false
+  "ml_trained": true
 }
