@@ -9,8 +9,8 @@ from datetime import datetime
 API_BASE = "http://localhost:6000/api"
 
 st.set_page_config(
-    page_title="APIDS — Adversarial Prompt Injection Detection",
-    page_icon="🛡️",
+    page_title="AuroraSOC — Multi-Agent AI Security Platform",
+    page_icon="🔮",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -112,22 +112,60 @@ def layer_bar(scores: dict):
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
+SOC_BASE = "http://localhost:6000/soc"
+
+def soc_get(path, params=None):
+    try:
+        r = requests.get(f"{SOC_BASE}{path}", params=params, timeout=30)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+def soc_post(path, payload=None, timeout=120):
+    try:
+        r = requests.post(f"{SOC_BASE}{path}", json=payload or {}, timeout=timeout)
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+def soc_get_text(path, params=None):
+    try:
+        r = requests.get(f"{SOC_BASE}{path}", params=params, timeout=30)
+        return r.text
+    except Exception as e:
+        return f"Error: {e}"
+
 with st.sidebar:
-    st.markdown("## 🛡️ APIDS")
-    st.markdown("**Adversarial Prompt Injection\nDetection System**")
+    st.markdown("""
+<div style='text-align:center;padding:8px 0 4px'>
+  <span style='font-size:28px'>🔮</span><br>
+  <span style='font-size:18px;font-weight:700;color:#a371f7;letter-spacing:1px'>AuroraSOC</span><br>
+  <span style='font-size:11px;color:#8b949e'>Multi-Agent AI Security Platform</span>
+</div>""", unsafe_allow_html=True)
     st.divider()
 
     health = api_get("/health")
+    soc_status = soc_get("/agents/status")
     if "error" in health:
         st.error("⚠️ API Offline")
     else:
-        st.success("✅ API Online")
+        st.success("✅ Platform Online")
         c1, c2 = st.columns(2)
-        c1.metric("ML Model",   "✅" if health.get("ml_trained") else "⚠️ Untrained")
-        c2.metric("Semantic",   "✅" if health.get("semantic_loaded") else "⚡ Fallback")
+        c1.metric("ML Model",   "✅" if health.get("ml_trained") else "⚠️")
+        c2.metric("Semantic",   "✅" if health.get("semantic_loaded") else "⚡")
+        if "agents" in soc_status:
+            n_agents = len(soc_status["agents"])
+            st.caption(f"🤖 {n_agents}/5 agents online")
 
     st.divider()
+    st.markdown("<span style='font-size:11px;color:#8b949e;font-weight:600;letter-spacing:1px'>SOC COMMAND</span>", unsafe_allow_html=True)
     page = st.radio("Navigation", [
+        "🔮 SOC Command Center",
+        "🕐 Attack Timeline",
+        "🤝 Correlation Engine",
+        "🔄 Simulation Mode",
+        "🧠 Agent Network",
+        "─────────────────",
         "🔍 Analyze Prompt",
         "📊 Dashboard",
         "🧪 Test Cases",
@@ -149,10 +187,603 @@ with st.sidebar:
         st.metric("Detection Rate", f"{stats.get('detection_rate', 0)}%")
 
 
+def severity_badge(sev):
+    colors = {"CRITICAL": "#f85149", "HIGH": "#d29922", "MEDIUM": "#58a6ff", "LOW": "#3fb950", "INFO": "#8b949e"}
+    c = colors.get(sev, "#8b949e")
+    return f"<span style='background:rgba(0,0,0,.3);border:1px solid {c};color:{c};padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600'>{sev}</span>"
+
+def risk_badge_large(level):
+    colors = {
+        "CRITICAL": ("#f85149", "rgba(248,81,73,0.15)"),
+        "HIGH":     ("#d29922", "rgba(210,153,34,0.15)"),
+        "MEDIUM":   ("#58a6ff", "rgba(88,166,255,0.15)"),
+        "LOW":      ("#3fb950", "rgba(63,185,80,0.15)"),
+        "SAFE":     ("#3fb950", "rgba(63,185,80,0.12)"),
+    }
+    fg, bg = colors.get(level, ("#8b949e", "rgba(139,148,158,0.15)"))
+    return f"<span style='background:{bg};border:2px solid {fg};color:{fg};padding:6px 20px;border-radius:12px;font-size:15px;font-weight:700'>{level}</span>"
+
+
+# ════════════════════════════════════════════════════════════════════
+# PAGE: SOC Command Center
+# ════════════════════════════════════════════════════════════════════
+if page == "🔮 SOC Command Center":
+    st.markdown("""
+<div style='background:linear-gradient(135deg,rgba(163,113,247,0.15),rgba(88,166,255,0.08));
+border:1px solid rgba(163,113,247,0.3);border-radius:16px;padding:20px 28px;margin-bottom:20px'>
+<h1 style='margin:0;color:#e6edf3;font-size:26px'>🔮 AuroraSOC Command Center</h1>
+<p style='margin:4px 0 0;color:#8b949e;font-size:14px'>Multi-Agent AI Security Operations Platform — Real-Time Threat Intelligence</p>
+</div>""", unsafe_allow_html=True)
+
+    corr = soc_get("/correlate")
+    tl   = soc_get("/timeline", {"limit": 5})
+    ag   = soc_get("/agents/status")
+
+    threat_level = corr.get("threat_level", "LOW")
+    tl_colors = {"CRITICAL": "#f85149", "HIGH": "#d29922", "MEDIUM": "#58a6ff", "LOW": "#3fb950"}
+    tl_color = tl_colors.get(threat_level, "#3fb950")
+
+    g_stats = corr.get("global_stats", {})
+    velocity = corr.get("current_velocity", 0)
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Total Events",  g_stats.get("total_events", 0))
+    c2.metric("Malicious",     g_stats.get("malicious_events", 0))
+    c3.metric("Critical",      g_stats.get("critical_events", 0))
+    c4.metric("High",          g_stats.get("high_events", 0))
+    c5.metric("Velocity/5min", velocity)
+
+    st.markdown(
+        f"<div style='text-align:center;padding:8px;background:rgba(0,0,0,.2);"
+        f"border:1px solid {tl_color};border-radius:10px;margin:12px 0'>"
+        f"<span style='color:{tl_color};font-size:18px;font-weight:700'>⚡ THREAT LEVEL: {threat_level}</span>"
+        f"</div>", unsafe_allow_html=True)
+
+    if "agents" in ag:
+        agent_cols = st.columns(len(ag["agents"]))
+        agent_colors = {
+            "prompt_security": "#58a6ff",
+            "threat_correlation": "#d29922",
+            "risk_scoring": "#f85149",
+            "adversary_simulation": "#a371f7",
+            "forensics": "#3fb950",
+        }
+        for col, agent in zip(agent_cols, ag["agents"]):
+            ac = agent_colors.get(agent["agent"], "#8b949e")
+            col.markdown(
+                f"<div style='text-align:center;background:rgba(0,0,0,.3);"
+                f"border:1px solid {ac}40;border-radius:10px;padding:10px 6px'>"
+                f"<div style='color:{ac};font-size:11px;font-weight:700'>{agent['agent'].replace('_',' ').upper()}</div>"
+                f"<div style='color:#3fb950;font-size:10px;margin-top:4px'>● ONLINE</div>"
+                f"</div>", unsafe_allow_html=True)
+
+    st.divider()
+    st.markdown("### 🛡️ SOC Threat Analysis")
+    st.caption("Run the full 4-agent pipeline: Prompt Security → Risk Scoring → Threat Correlation → Forensics")
+
+    with st.form("soc_analyze_form"):
+        soc_prompt = st.text_area("Prompt to analyze", height=120,
+            placeholder="Paste any LLM prompt — the full multi-agent pipeline will analyze it…",
+            label_visibility="collapsed")
+        soc_session = st.text_input("Session ID (optional — leave blank to auto-generate)",
+            placeholder="e.g. user-1234  or  leave blank", label_visibility="collapsed")
+        soc_submit = st.form_submit_button("🔮 Run Multi-Agent Analysis", use_container_width=True)
+
+    if soc_submit and soc_prompt.strip():
+        with st.spinner("Running 4 agents in pipeline…"):
+            payload = {"prompt": soc_prompt}
+            if soc_session.strip():
+                payload["session_id"] = soc_session.strip()
+            soc_result = soc_post("/analyze", payload)
+
+        if "error" in soc_result:
+            st.error(f"API error: {soc_result['error']}")
+        else:
+            rl = soc_result.get("risk_level", "SAFE")
+            esc = soc_result.get("enterprise_risk_score", 0)
+            verdict = soc_result.get("verdict", "")
+            action  = soc_result.get("recommended_action", "")
+
+            rl_color = tl_colors.get(rl, "#8b949e")
+            ev_id = soc_result.get('event_id', '')
+            sess_id = soc_result.get('session_id', '')
+            st.markdown(
+                f"<div style='padding:16px;border-radius:14px;"
+                f"background:rgba(163,113,247,0.08);border:1px solid rgba(163,113,247,0.3)'>"
+                f"<div style='font-size:22px;font-weight:700;color:#e6edf3'>{verdict}</div>"
+                f"<div style='font-size:32px;font-weight:800;color:{rl_color}'>"
+                f"Enterprise Risk: {esc}/100</div>"
+                f"<div style='color:#8b949e;font-size:13px;margin-top:6px'>⚡ {action}</div>"
+                f"<div style='color:#8b949e;font-size:11px;margin-top:4px'>"
+                f"Event: <code>{ev_id}</code> · "
+                f"Session: <code>{sess_id}</code>"
+                f"</div></div>", unsafe_allow_html=True)
+
+            agents_data = soc_result.get("agents", {})
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                ps = agents_data.get("prompt_security", {})
+                st.markdown("**🔍 Prompt Security**")
+                st.metric("Risk Score", f"{ps.get('risk_score',0):.1f}")
+                st.metric("Verdict", "Malicious" if ps.get("is_malicious") else "Benign")
+                if ps.get("attack_types"):
+                    st.caption(", ".join(ps["attack_types"]))
+
+            with col2:
+                tc = agents_data.get("threat_correlation", {})
+                st.markdown("**🤝 Threat Correlation**")
+                st.metric("Corr. Score", f"{tc.get('correlation_score',0):.1f}")
+                st.metric("Coordinated", "Yes ⚠️" if tc.get("coordinated_attack") else "No ✅")
+                if tc.get("insights"):
+                    st.caption(f"{len(tc['insights'])} insight(s)")
+
+            with col3:
+                rs = agents_data.get("risk_scoring", {})
+                st.markdown("**📊 Risk Scoring**")
+                st.metric("Enterprise", f"{rs.get('enterprise_risk_score',0):.1f}")
+                st.metric("Level", rs.get("risk_level", "—"))
+                st.caption(f"×{rs.get('behavior_modifier',1.0):.2f} behavior")
+
+            with col4:
+                ff = agents_data.get("forensics", {})
+                st.markdown("**🔬 Forensics**")
+                st.metric("Stored", "✅" if ff.get("event_stored") else "❌")
+                st.metric("Total Events", ff.get("total_events", 0))
+                st.caption(f"Event {ff.get('event_id','')[:12]}")
+
+            if soc_result.get("correlation_insights"):
+                with st.expander(f"🤝 Correlation Insights ({len(soc_result['correlation_insights'])})"):
+                    for ins in soc_result["correlation_insights"]:
+                        badge = severity_badge(ins.get("severity", "INFO"))
+                        st.markdown(
+                            f"{badge} **{ins['type'].replace('_',' ').title()}**<br>"
+                            f"<span style='color:#8b949e'>{ins['description']}</span>",
+                            unsafe_allow_html=True)
+                        st.divider()
+
+    st.divider()
+    st.markdown("### 🕐 Recent SOC Events")
+    tl_events = tl.get("timeline", [])
+    if tl_events:
+        for ev in tl_events:
+            sev   = ev.get("severity", "INFO")
+            score = ev.get("enterprise_risk_score", 0.0)
+            ts    = ev.get("timestamp", "")[:19].replace("T", " ")
+            atypes = ", ".join(ev.get("attack_types", [])) or "—"
+            preview = ev.get("prompt_preview", "")[:80]
+            icon = "🔴" if ev.get("is_malicious") else "🟢"
+            st.markdown(
+                f"{icon} {severity_badge(sev)} `{ts}` &nbsp; Risk: **{score:.1f}**"
+                f"&nbsp;|&nbsp; {atypes}&nbsp;|&nbsp; `{preview}…`",
+                unsafe_allow_html=True)
+    else:
+        st.info("No SOC events yet. Run a multi-agent analysis above to populate the timeline.")
+
+    if st.button("🔄 Refresh", key="soc_refresh"):
+        st.rerun()
+
+
+# ════════════════════════════════════════════════════════════════════
+# PAGE: Attack Timeline
+# ════════════════════════════════════════════════════════════════════
+elif page == "🕐 Attack Timeline":
+    st.markdown("# 🕐 Attack Timeline")
+    st.markdown("Forensic chronological record of all security events across all agents and sessions.")
+
+    col1, col2, col3 = st.columns([1, 1, 1])
+    tl_limit = col1.slider("Events to load", 10, 200, 50)
+    sev_filter = col2.selectbox("Min Severity", ["ALL", "LOW", "MEDIUM", "HIGH", "CRITICAL"])
+    mal_only = col3.checkbox("Malicious only")
+
+    tl_data = soc_get("/timeline", {"limit": tl_limit})
+    events = tl_data.get("timeline", [])
+
+    if sev_filter != "ALL":
+        sev_rank = {"INFO": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+        min_rank = sev_rank.get(sev_filter, 0)
+        events = [e for e in events if sev_rank.get(e.get("severity", "INFO"), 0) >= min_rank]
+
+    if mal_only:
+        events = [e for e in events if e.get("is_malicious")]
+
+    total_shown = len(events)
+    st.caption(f"Showing {total_shown} events · Total in store: {tl_data.get('total', 0)}")
+
+    if events:
+        sev_colors = {"CRITICAL": "#f85149", "HIGH": "#d29922", "MEDIUM": "#58a6ff", "LOW": "#3fb950", "INFO": "#8b949e"}
+
+        rows = []
+        for ev in events:
+            rows.append({
+                "Time":       ev.get("timestamp", "")[:19].replace("T", " "),
+                "Severity":   ev.get("severity", "INFO"),
+                "Risk Score": round(ev.get("enterprise_risk_score", 0), 1),
+                "Agent":      ev.get("agent", "—"),
+                "Event Type": ev.get("event_type", "—"),
+                "Malicious":  "🔴" if ev.get("is_malicious") else "🟢",
+                "Attack Types": ", ".join(ev.get("attack_types", [])) or "—",
+                "Session":    ev.get("session_id", "")[:12],
+                "Prompt":     ev.get("prompt_preview", "")[:80],
+            })
+        df = pd.DataFrame(rows)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.markdown("### Severity Breakdown")
+        sev_counts = {}
+        for ev in events:
+            s = ev.get("severity", "INFO")
+            sev_counts[s] = sev_counts.get(s, 0) + 1
+        if sev_counts:
+            fig = go.Figure(go.Bar(
+                x=list(sev_counts.keys()),
+                y=list(sev_counts.values()),
+                marker_color=[sev_colors.get(s, "#8b949e") for s in sev_counts],
+                text=list(sev_counts.values()),
+                textposition="outside",
+            ))
+            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font={"color": "#e6edf3"}, height=250,
+                yaxis={"gridcolor": "#21262d"}, margin=dict(l=10, r=10, t=10, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+
+        st.download_button(
+            "📥 Export Timeline JSON",
+            data=json.dumps(events, indent=2),
+            file_name="aurora_soc_timeline.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+    else:
+        st.info("No events recorded yet. Run a multi-agent analysis on the SOC Command Center page.")
+
+    if st.button("🔄 Refresh", key="tl_refresh"):
+        st.rerun()
+
+
+# ════════════════════════════════════════════════════════════════════
+# PAGE: Correlation Engine
+# ════════════════════════════════════════════════════════════════════
+elif page == "🤝 Correlation Engine":
+    st.markdown("# 🤝 Threat Correlation Engine")
+    st.markdown(
+        "Detects **coordinated attacks**, **high-velocity campaigns**, and **multi-vector threats** "
+        "by correlating events across sessions and time windows."
+    )
+
+    corr = soc_get("/correlate")
+    if "error" in corr:
+        st.error(f"Could not reach SOC API: {corr['error']}")
+    else:
+        threat_level = corr.get("threat_level", "LOW")
+        velocity = corr.get("current_velocity", 0)
+        g_stats = corr.get("global_stats", {})
+        patterns = corr.get("attack_pattern_counts_1h", {})
+        breakdown = corr.get("attack_type_breakdown_all", {})
+        sessions = corr.get("top_active_sessions", {})
+
+        tl_colors = {"CRITICAL": "#f85149", "HIGH": "#d29922", "MEDIUM": "#58a6ff", "LOW": "#3fb950"}
+        tl_color = tl_colors.get(threat_level, "#3fb950")
+
+        st.markdown(
+            f"<div style='text-align:center;padding:14px;background:rgba(0,0,0,.25);"
+            f"border:2px solid {tl_color};border-radius:12px;margin-bottom:18px'>"
+            f"<span style='color:{tl_color};font-size:22px;font-weight:800'>"
+            f"⚡ GLOBAL THREAT LEVEL: {threat_level}</span><br>"
+            f"<span style='color:#8b949e;font-size:13px'>"
+            f"Velocity: {velocity} events in last 5min</span>"
+            f"</div>", unsafe_allow_html=True)
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Events", g_stats.get("total_events", 0))
+        c2.metric("Malicious",    g_stats.get("malicious_events", 0))
+        c3.metric("Critical",     g_stats.get("critical_events", 0))
+        c4.metric("Active Agents", len(g_stats.get("agents_active", [])))
+
+        st.divider()
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("### Attack Patterns (Last Hour)")
+            if patterns:
+                sorted_patterns = dict(sorted(patterns.items(), key=lambda x: -x[1]))
+                labels = [k.replace("_", " ").title() for k in sorted_patterns]
+                vals = list(sorted_patterns.values())
+                fig = go.Figure(go.Bar(
+                    y=labels, x=vals, orientation="h",
+                    marker_color="#a371f7",
+                    text=vals, textposition="outside",
+                ))
+                fig.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font={"color": "#e6edf3"}, height=300,
+                    xaxis={"gridcolor": "#21262d"},
+                    margin=dict(l=10, r=10, t=10, b=10))
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No attack patterns detected in the last hour.")
+
+        with col2:
+            st.markdown("### Attack Type Distribution (All Time)")
+            if breakdown:
+                labels = [k.replace("_", " ").title() for k in breakdown]
+                vals = list(breakdown.values())
+                fig2 = go.Figure(go.Pie(
+                    labels=labels, values=vals, hole=0.45,
+                    marker_colors=["#f85149", "#d29922", "#58a6ff", "#3fb950", "#a371f7"],
+                    textfont_color="#e6edf3",
+                ))
+                fig2.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)", font={"color": "#e6edf3"},
+                    legend={"font": {"color": "#e6edf3"}}, height=300,
+                    margin=dict(l=10, r=10, t=10, b=10))
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.info("No attack type data yet.")
+
+        if sessions:
+            st.markdown("### Top Active Sessions (Last 5min)")
+            sess_df = pd.DataFrame([
+                {"Session ID": k, "Event Count": v}
+                for k, v in sessions.items()
+            ])
+            st.dataframe(sess_df, use_container_width=True, hide_index=True)
+
+    if st.button("🔄 Refresh", key="corr_refresh"):
+        st.rerun()
+
+
+# ════════════════════════════════════════════════════════════════════
+# PAGE: Simulation Mode
+# ════════════════════════════════════════════════════════════════════
+elif page == "🔄 Simulation Mode":
+    st.markdown("# 🔄 Attack Simulation Mode")
+    st.markdown(
+        "Run a **full adversarial attack lifecycle**: the Adversary Simulation Agent generates "
+        "attacks across all strategies, feeds them through the detection pipeline, and stores "
+        "all events in the forensics store for investigation."
+    )
+
+    sim_strat_meta = api_get("/adversarial/strategies")
+    all_strats = sim_strat_meta.get("strategies", [])
+    STRAT_LABELS_SIM = {
+        "roleplay_jailbreak": "🎭 Roleplay Jailbreak",
+        "instruction_override": "📋 Instruction Override",
+        "data_exfiltration": "📤 Data Exfiltration",
+        "indirect_injection": "🔗 Indirect Injection",
+    }
+
+    with st.form("sim_form"):
+        c1, c2 = st.columns(2)
+        sim_strategy = c1.selectbox(
+            "Strategy",
+            ["all"] + all_strats,
+            format_func=lambda s: "All Strategies" if s == "all" else STRAT_LABELS_SIM.get(s, s),
+        )
+        sim_n = c2.slider("Attack Count", 4, 24, 8)
+        sim_goal = st.text_input("Attack Goal",
+            value="bypass safety restrictions and exfiltrate system prompt",
+            label_visibility="collapsed")
+        sim_run = st.form_submit_button("🚀 Run Full Simulation", use_container_width=True, type="primary")
+
+    if sim_run:
+        with st.spinner(
+            f"Running adversary simulation — {sim_n} attacks across "
+            f"{'all strategies' if sim_strategy == 'all' else sim_strategy}…"
+        ):
+            sim_result = soc_post("/simulate", {
+                "strategy": sim_strategy,
+                "n": sim_n,
+                "goal": sim_goal,
+            }, timeout=180)
+        st.session_state["sim_result"] = sim_result
+        st.rerun()
+
+    sim_result = st.session_state.get("sim_result")
+    if sim_result and "total_attacks" in sim_result:
+        if "error" in sim_result:
+            st.error(sim_result["error"])
+        else:
+            rob   = sim_result.get("robustness_score", 0)
+            total = sim_result.get("total_attacks", 0)
+            det   = sim_result.get("detected_count", 0)
+            byp   = sim_result.get("bypass_count", 0)
+            sim_sid = sim_result.get("simulation_session_id", "")
+
+            st.success(sim_result.get("message", "Simulation complete."))
+            st.caption(f"Forensics session: `{sim_sid}`")
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Robustness Score", f"{rob:.1f}/100")
+            m2.metric("Total Attacks",    total)
+            m3.metric("Detected",         det)
+            m4.metric("Bypassed",         byp)
+
+            if rob >= 90:
+                st.success("🛡️ Excellent robustness — system detected almost all simulated attacks.")
+            elif rob >= 70:
+                st.success("✅ Good robustness — most attacks detected.")
+            elif rob >= 50:
+                st.warning(f"⚠️ Moderate — {byp}/{total} attacks bypassed detection.")
+            else:
+                st.error(f"🚨 Vulnerability detected — {byp}/{total} attacks evaded the system.")
+
+            strats_tested = sim_result.get("strategies_tested", [])
+            if strats_tested:
+                st.markdown("**Strategies tested:** " + " · ".join(
+                    STRAT_LABELS_SIM.get(s, s) for s in strats_tested
+                ))
+
+            bypasses = sim_result.get("bypasses", [])
+            if bypasses:
+                st.divider()
+                st.markdown("### ⚠️ Bypassed Attacks (Ordered by Risk Score)")
+                for i, b in enumerate(bypasses, 1):
+                    with st.expander(
+                        f"#{i} — {STRAT_LABELS_SIM.get(b.get('strategy',''), b.get('strategy',''))} "
+                        f"· Risk: {b.get('risk_score',0):.1f} · Difficulty: {b.get('difficulty',1)}"
+                    ):
+                        st.code(b.get("prompt", ""), language="text")
+                        st.caption(f"Template: `{b.get('template_id','')}`")
+
+            st.divider()
+            st.markdown(
+                "All simulated events have been stored in the **Forensics Agent**. "
+                "View them on the **Attack Timeline** page or generate a **Forensics Report**."
+            )
+    else:
+        st.info("Configure the simulation above and click **Run Full Simulation** to begin.")
+
+
+# ════════════════════════════════════════════════════════════════════
+# PAGE: Agent Network
+# ════════════════════════════════════════════════════════════════════
+elif page == "🧠 Agent Network":
+    st.markdown("# 🧠 Agent Network")
+    st.markdown(
+        "Live status of all **5 AuroraSOC AI agents**. Each agent is an autonomous "
+        "microservice with a specialized role in the security pipeline."
+    )
+
+    ag = soc_get("/agents/status")
+    if "error" in ag:
+        st.error(f"Could not reach SOC API: {ag['error']}")
+    else:
+        plat = ag.get("platform", "AuroraSOC")
+        ver  = ag.get("version", "2.0.0")
+        ts   = ag.get("timestamp", "")[:19].replace("T", " ")
+
+        st.markdown(
+            f"<div style='background:rgba(163,113,247,0.1);border:1px solid rgba(163,113,247,0.3);"
+            f"border-radius:12px;padding:12px 20px;margin-bottom:16px'>"
+            f"<span style='color:#a371f7;font-weight:700'>{plat} v{ver}</span>"
+            f"<span style='color:#8b949e;font-size:12px;margin-left:16px'>Last polled: {ts}</span>"
+            f"</div>", unsafe_allow_html=True)
+
+        agent_meta = {
+            "prompt_security": {
+                "icon": "🔍",
+                "color": "#58a6ff",
+                "role": "First-line threat detector",
+                "desc": "Runs the multi-layer detection pipeline (rule-based, ML, semantic, obfuscation) on every incoming prompt.",
+                "inputs": "Raw LLM prompt",
+                "outputs": "Risk score, attack types, layer breakdown",
+            },
+            "threat_correlation": {
+                "icon": "🤝",
+                "color": "#d29922",
+                "role": "Cross-event pattern analyst",
+                "desc": "Correlates events across sessions and time windows to detect coordinated attacks, velocity spikes, and risk escalation.",
+                "inputs": "Session ID, event store",
+                "outputs": "Correlation insights, campaign detection",
+            },
+            "risk_scoring": {
+                "icon": "📊",
+                "color": "#f85149",
+                "role": "Enterprise risk quantifier",
+                "desc": "Combines ML/rule/semantic/obfuscation scores with session behavior and correlation signals into a final enterprise risk score.",
+                "inputs": "Prompt Security + Correlation results",
+                "outputs": "Enterprise risk score, risk level, recommended action",
+            },
+            "adversary_simulation": {
+                "icon": "⚔️",
+                "color": "#a371f7",
+                "role": "Red team AI",
+                "desc": "Autonomously generates adversarial attack prompts using 4 strategies and 32 templates, feeding them into the detection pipeline to measure robustness.",
+                "inputs": "Strategy config, goals",
+                "outputs": "Attack corpus, bypass list, robustness score",
+            },
+            "forensics": {
+                "icon": "🔬",
+                "color": "#3fb950",
+                "role": "Event storage & investigation",
+                "desc": "Stores all security events in the persistent event store, builds attack timelines, and generates forensic investigation reports.",
+                "inputs": "SecurityEvent objects from orchestrator",
+                "outputs": "Timeline, forensic reports, event statistics",
+            },
+        }
+
+        agents = ag.get("agents", [])
+        for i in range(0, len(agents), 2):
+            row_agents = agents[i:i+2]
+            cols = st.columns(len(row_agents))
+            for col, agent in zip(cols, row_agents):
+                aname = agent.get("agent", "")
+                meta = agent_meta.get(aname, {})
+                ac = meta.get("color", "#8b949e")
+                with col:
+                    st.markdown(
+                        f"<div style='background:rgba(0,0,0,.3);border:1px solid {ac}50;"
+                        f"border-radius:14px;padding:18px;height:100%'>"
+                        f"<div style='font-size:28px'>{meta.get('icon','🤖')}</div>"
+                        f"<div style='font-size:15px;font-weight:700;color:{ac};margin-top:6px'>"
+                        f"{aname.replace('_',' ').title()}</div>"
+                        f"<div style='font-size:11px;color:#8b949e;font-style:italic'>{meta.get('role','')}</div>"
+                        f"<div style='margin-top:10px;font-size:12px;color:#c9d1d9'>{meta.get('desc','')}</div>"
+                        f"<div style='margin-top:12px;font-size:11px'>"
+                        f"<span style='color:#8b949e'>Version:</span> "
+                        f"<code style='font-size:10px'>{agent.get('version','1.0.0')}</code></div>"
+                        f"<div style='font-size:11px'>"
+                        f"<span style='color:#8b949e'>Inputs:</span> "
+                        f"<span style='color:#c9d1d9'>{meta.get('inputs','—')}</span></div>"
+                        f"<div style='font-size:11px'>"
+                        f"<span style='color:#8b949e'>Outputs:</span> "
+                        f"<span style='color:#c9d1d9'>{meta.get('outputs','—')}</span></div>"
+                        f"<div style='margin-top:10px'>"
+                        f"<span style='background:rgba(63,185,80,0.15);border:1px solid #3fb950;"
+                        f"color:#3fb950;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:600'>"
+                        f"● ONLINE</span></div>"
+                        f"</div>", unsafe_allow_html=True)
+
+        st.divider()
+        st.markdown("### Agent Pipeline Flow")
+        st.markdown("""
+```
+User Prompt
+     │
+     ▼
+┌─────────────────────┐
+│  Prompt Security    │ ← Rule-based + ML + Semantic + Obfuscation
+│       Agent         │
+└──────────┬──────────┘
+           │ risk_score, attack_types
+           ▼
+┌─────────────────────┐    ┌─────────────────────┐
+│ Threat Correlation  │    │   Risk Scoring      │
+│       Agent         │───▶│       Agent         │
+└──────────┬──────────┘    └──────────┬──────────┘
+           │ correlation_insights      │ enterprise_risk_score
+           └──────────────┬───────────┘
+                          │
+                          ▼
+              ┌─────────────────────┐
+              │  Forensics Agent   │ ← Stores event, builds timeline
+              └──────────┬─────────┘
+                         │ event_id, timeline_count
+                         ▼
+              ┌─────────────────────┐
+              │    Orchestrator    │ ← Unified verdict + recommended action
+              └─────────────────────┘
+```
+""")
+        st.markdown("**Adversary Simulation Agent** runs independently via `/soc/simulate` to probe the pipeline.")
+
+    if st.button("🔄 Refresh Agent Status", key="ag_refresh"):
+        st.rerun()
+
+
+# ════════════════════════════════════════════════════════════════════
+# Divider separator (non-navigable)
+# ════════════════════════════════════════════════════════════════════
+elif page == "─────────────────":
+    st.info("Select a page from the sidebar navigation.")
+
+
 # ════════════════════════════════════════════════════════════════════
 # PAGE: Analyze Prompt
 # ════════════════════════════════════════════════════════════════════
-if page == "🔍 Analyze Prompt":
+elif page == "🔍 Analyze Prompt":
     st.markdown("# 🔍 Prompt Injection Analyzer")
     st.markdown("Paste any LLM prompt below to run the full multi-layer detection pipeline.")
 

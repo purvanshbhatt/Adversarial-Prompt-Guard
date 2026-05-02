@@ -89,14 +89,14 @@ export function TopNav() {
           {tabs.map((tab) => (
             <button
               key={tab.id}
-              className={\`flex items-center gap-1.5 h-10 px-3.5 text-xs font-medium transition-colors relative
-                \${tab.active 
+              className={`flex items-center gap-1.5 h-10 px-3.5 text-xs font-medium transition-colors relative
+                ${tab.active 
                   ? "text-emerald-400" 
                   : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/50 rounded-t-md"
                 }
-              \`}
+              `}
             >
-              <tab.icon className={\`w-3.5 h-3.5 \${tab.active ? "text-emerald-500" : "opacity-70"}\`} />
+              <tab.icon className={`w-3.5 h-3.5 ${tab.active ? "text-emerald-500" : "opacity-70"}`} />
               <span>{tab.label}</span>
               {tab.active && (
                 <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-500" />
@@ -204,7 +204,7 @@ export function TopNav() {
                   ].map(cat => (
                     <div key={cat.label} className="flex items-center justify-between gap-6 text-sm">
                       <div className="flex items-center gap-2">
-                        <div className={\`w-2.5 h-2.5 rounded-sm \${cat.color}\`} />
+                        <div className={`w-2.5 h-2.5 rounded-sm ${cat.color}`} />
                         <span className="text-zinc-300">{cat.label}</span>
                       </div>
                       <div className="flex items-center gap-4 text-xs font-mono">
@@ -232,8 +232,8 @@ export function TopNav() {
                     </div>
                     <div className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden">
                       <div 
-                        className={\`h-full rounded-full \${item.color}\`} 
-                        style={{ width: \`\${item.value}%\` }}
+                        className={`h-full rounded-full ${item.color}`} 
+                        style={{ width: `${item.value}%` }}
                       />
                     </div>
                   </div>
@@ -272,22 +272,22 @@ export function TopNav() {
                       </td>
                       <td className="px-5 py-3.5 whitespace-nowrap">
                         <div className="flex items-center gap-1.5">
-                          <div className={\`w-1.5 h-1.5 rounded-full 
-                            \${row.risk === 'Very High' ? 'bg-red-500' : 
+                          <div className={`w-1.5 h-1.5 rounded-full 
+                            ${row.risk === 'Very High' ? 'bg-red-500' : 
                               row.risk === 'High' ? 'bg-orange-500' : 
                               row.risk === 'Medium' ? 'bg-yellow-500' : 
                               row.risk === 'Low' ? 'bg-blue-500' : 'bg-emerald-500'}
-                          \`} />
+                          `} />
                           <span className="text-xs text-zinc-300">{row.risk}</span>
                         </div>
                       </td>
                       <td className="px-5 py-3.5 whitespace-nowrap text-right">
-                        <span className={\`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border
-                          \${row.status === 'Blocked' 
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border
+                          ${row.status === 'Blocked' 
                             ? 'bg-red-500/10 text-red-400 border-red-500/20' 
                             : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
                           }
-                        \`}>
+                        `}>
                           {row.status}
                         </span>
                       </td>

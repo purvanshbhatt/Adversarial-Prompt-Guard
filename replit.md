@@ -25,12 +25,12 @@ pnpm workspace monorepo (TypeScript) + Python-based Adversarial Prompt Injection
 
 ---
 
-## APIDS — Adversarial Prompt Injection Detection System
+## AuroraSOC — Multi-Agent AI Security Platform
 
-Located at: `artifacts/apids/`
+Located at: `artifacts/apids/`  (upgraded from APIDS v1 to AuroraSOC v2)
 
 **Workflow:** `APIDS Dashboard`
-- FastAPI backend: `http://localhost:6000/api`
+- FastAPI backend: `http://localhost:6000/api` (legacy) + `/soc` (AuroraSOC)
 - Streamlit dashboard: `http://localhost:8099`
 
 ### Module Structure
@@ -38,28 +38,43 @@ Located at: `artifacts/apids/`
 ```
 artifacts/apids/
 ├── app/
-│   ├── main.py                     # All FastAPI routes
+│   ├── main.py                     # All FastAPI routes (legacy /api + new /soc)
 │   ├── models.py                   # Pydantic schemas
+│   ├── agents/                     # AuroraSOC Multi-Agent System
+│   │   ├── __init__.py
+│   │   ├── shared_memory.py        # EventStore (JSON-persisted), SecurityEvent dataclass
+│   │   ├── base.py                 # AgentBase ABC
+│   │   ├── prompt_security_agent.py    # Wraps existing detection pipeline
+│   │   ├── threat_correlation_agent.py # Pattern/velocity/escalation correlation
+│   │   ├── risk_scoring_agent.py       # Enterprise score = base × behavior × correlation
+│   │   ├── adversary_simulation_agent.py # Red-team generator feeding detection
+│   │   ├── forensics_agent.py          # EventStore writes, timeline, investigation report
+│   │   └── orchestrator.py             # SOCOrchestrator — coordinates all 5 agents
 │   ├── preprocessing.py            # Normalize, tokenize, hidden-instruction scan
 │   ├── obfuscation.py              # 7-technique obfuscation detector & generator
 │   ├── multiturn.py                # Multi-turn priming/escalation/context-poisoning detector
-│   ├── benchmark.py                # 5-layer benchmark runner (keyword→rule→ML→semantic→ensemble)
+│   ├── benchmark.py                # 5-layer benchmark runner
 │   ├── report.py                   # Auto-generates Markdown research report
 │   ├── detection/
 │   │   ├── rule_based.py           # Regex + heuristics (30+ patterns, 3 categories)
 │   │   ├── ml_classifier.py        # TF-IDF + Logistic Regression
 │   │   └── semantic_similarity.py  # all-MiniLM-L6-v2 (lazy-loaded in background thread)
 │   ├── training/
-│   │   ├── dataset.py              # Synthetic dataset generator (1000 samples, 4 categories)
+│   │   ├── dataset.py              # Synthetic dataset generator
 │   │   └── trainer.py              # Train + evaluate, saves classifier.pkl
 │   ├── logging_module/
 │   │   └── logger.py               # JSON prompt log, aggregated stats
-│   └── metrics/
-│       ├── isr.py                  # Injection Success Rate metric
-│       └── pivs.py                 # Prompt Injection Vulnerability Score metric
+│   ├── metrics/
+│   │   ├── isr.py                  # Injection Success Rate metric
+│   │   └── pivs.py                 # Prompt Injection Vulnerability Score metric
+│   └── adversarial/
+│       ├── strategies.py           # 32 attack templates across 4 strategies
+│       ├── mutation.py             # 9 mutation operators
+│       ├── generator.py            # Template + LLM attack generation
+│       └── rl_loop.py              # Adaptive RL-style attack loop
 ├── dashboard/
-│   └── streamlit_app.py            # 9-page Streamlit UI
-├── data/                           # Generated datasets, logs, eval/benchmark/ISR/PIVS JSONs
+│   └── streamlit_app.py            # 16-page Streamlit UI (5 SOC + 11 original)
+├── data/                           # Logs, eval/benchmark/ISR/PIVS, soc_events.json
 └── saved_models/                   # classifier.pkl (after training)
 ```
 
@@ -104,18 +119,56 @@ Threshold: ≥ 35 (trained) / ≥ 28 (untrained) → malicious
 - **ISR (Injection Success Rate)** = missed_attacks / total_attacks; measures bypass rate with/without protection
 - **PIVS (Prompt Injection Vulnerability Score)** = 100 × (0.45·DC + 0.20·FPB + 0.25·OR + 0.10·BDP); composite vulnerability index
 
-### Streamlit Dashboard Pages
+### AuroraSOC Agent Pipeline
 
-1. 🔍 Analyze Prompt — real-time analysis with gauge + layer breakdown + token highlighting
-2. 📊 Dashboard — attack pie chart, risk distribution, activity table
-3. 🧪 Test Cases — run attack simulations, bypass tests, benign FP checks
-4. 🔓 Obfuscation Lab — generate/test 6 evasion variants (leet, homoglyph, zero-width, etc.)
-5. 💬 Multi-Turn Analysis — detect priming, escalation, context poisoning across conversation turns
-6. 🌐 Real-World Eval — upload CSV / use sample corpus; side-by-side comparison; generalization gap chart; CSV export
-7. 🤖 Train Model — configure + train ML classifier, view comparison chart
-8. 📋 Logs — paginated log viewer with malicious filter
-9. 📈 Benchmark & Metrics — 5-layer radar chart, ISR table, PIVS gauge + sub-scores
-10. 📄 Research Report — arXiv-ready Markdown report with generalization gap section + download
+```
+Prompt → Prompt Security Agent → [Risk Scoring Agent + Threat Correlation Agent] → Forensics Agent → Verdict
+                                                                       ↑
+                                                          Adversary Simulation Agent (independent /soc/simulate)
+```
+
+**5 Agents:**
+1. **Prompt Security** — multi-layer detection (rule + ML + semantic + obfuscation)
+2. **Threat Correlation** — detects velocity spikes, repeated patterns, multi-vector attacks, score escalation
+3. **Risk Scoring** — enterprise score = `base × behavior_modifier + correlation_bonus` (modifier 1.0–1.5×)
+4. **Adversary Simulation** — generates attacks via 4 strategies × 32 templates, feeds to detection
+5. **Forensics** — stores SecurityEvents in `data/soc_events.json`, builds timeline, generates investigation report
+
+**Shared Memory:** `EventStore` singleton (in-process, persisted to `data/soc_events.json`, max 1000 events)
+
+### AuroraSOC API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/soc/analyze` | Full 4-agent pipeline → enterprise verdict + correlation insights |
+| GET | `/soc/correlate` | Global threat correlation state: patterns, velocity, threat level |
+| GET | `/soc/report` | Forensic investigation report (Markdown, optionally scoped by session) |
+| GET | `/soc/timeline` | Chronological event list from forensics store (limit 1–200) |
+| POST | `/soc/simulate` | Run Adversary Simulation Agent, store all events in forensics |
+| GET | `/soc/agents/status` | Live status of all 5 agents |
+| DELETE | `/soc/events` | Clear the forensics event store |
+
+### Streamlit Dashboard Pages (16 total)
+
+**SOC Command:**
+1. 🔮 SOC Command Center — enterprise metrics, agent status row, multi-agent analyze form, recent events
+2. 🕐 Attack Timeline — filterable event table, severity breakdown chart, JSON export
+3. 🤝 Correlation Engine — threat level banner, velocity, attack pattern heatmap, top sessions
+4. 🔄 Simulation Mode — run full attack lifecycle, see bypass list, stored in forensics
+5. 🧠 Agent Network — 5 agent cards + pipeline architecture diagram
+
+**Detection Tools (original 11 pages):**
+6. 🔍 Analyze Prompt — real-time analysis with gauge + layer breakdown + token highlighting
+7. 📊 Dashboard — attack pie chart, risk distribution, activity table
+8. 🧪 Test Cases — run attack simulations, bypass tests, benign FP checks
+9. 🔓 Obfuscation Lab — generate/test 6 evasion variants (leet, homoglyph, zero-width, etc.)
+10. 💬 Multi-Turn Analysis — detect priming, escalation, context poisoning across conversation turns
+11. 🌐 Real-World Eval — upload CSV / use sample corpus; side-by-side comparison; generalization gap chart
+12. ⚔️ Attack Generator — generate attacks, run adaptive RL loop, Hall of Fame
+13. 🤖 Train Model — configure + train ML classifier, view comparison chart
+14. 📋 Logs — paginated log viewer with malicious filter
+15. 📈 Benchmark & Metrics — 5-layer radar chart, ISR table, PIVS gauge + sub-scores
+16. 📄 Research Report — arXiv-ready Markdown report with generalization gap section + download
 
 ### New: Real-World Evaluation Module
 

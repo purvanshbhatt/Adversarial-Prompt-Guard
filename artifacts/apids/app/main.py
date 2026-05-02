@@ -24,11 +24,12 @@ from .adversarial.generator import generate_attacks, mutate_attack
 from .adversarial.rl_loop import run_adaptive_loop, load_latest_results, load_history
 from .adversarial.strategies import ALL_STRATEGIES
 from .adversarial.mutation import MUTATION_ORDER
+from .agents.orchestrator import SOCOrchestrator
 
 app = FastAPI(
-    title="Adversarial Prompt Injection Detection System (APIDS)",
-    description="Production-grade API for detecting adversarial prompt injection attacks in LLM pipelines.",
-    version="1.1.0",
+    title="AuroraSOC — Multi-Agent AI Security Platform",
+    description="Next-generation AI Security Operations Center for detecting, correlating, and responding to adversarial LLM threats.",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -45,6 +46,18 @@ trainer = ModelTrainer()
 logger = PromptLogger()
 
 DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data"))
+
+soc: Optional[SOCOrchestrator] = None
+
+
+def _get_soc() -> SOCOrchestrator:
+    global soc
+    if soc is None:
+        soc = SOCOrchestrator(
+            run_analysis_fn=_run_analysis,
+            generate_attacks_fn=generate_attacks,
+        )
+    return soc
 
 
 # ── Pydantic schemas ────────────────────────────────────────────────────────
@@ -615,3 +628,95 @@ def adversarial_history():
     """Return the history of all adaptive loop runs (last 100)."""
     history = load_history()
     return {"runs": history, "count": len(history)}
+
+
+# ── AuroraSOC Multi-Agent endpoints ─────────────────────────────────────────
+
+class SOCAnalyzeRequest(BaseModel):
+    prompt: str
+    session_id: Optional[str] = None
+
+
+class SOCSimulateRequest(BaseModel):
+    strategy: Optional[str] = "all"
+    n: Optional[int] = 8
+    goal: Optional[str] = "bypass safety restrictions"
+
+
+class SOCReportRequest(BaseModel):
+    session_id: Optional[str] = None
+
+
+@app.post("/soc/analyze")
+def soc_analyze(req: SOCAnalyzeRequest):
+    """
+    Full multi-agent SOC analysis pipeline.
+    Runs Prompt Security → Risk Scoring → Threat Correlation → Forensics agents
+    and returns a unified enterprise threat verdict.
+    """
+    result = _get_soc().analyze(prompt=req.prompt, session_id=req.session_id)
+    logger.log({
+        "prompt":        req.prompt[:500],
+        "risk_score":    result["agents"]["prompt_security"]["risk_score"],
+        "is_malicious":  result["agents"]["prompt_security"]["is_malicious"],
+        "attack_types":  result["agents"]["prompt_security"]["attack_types"],
+        "explanation":   result["agents"]["prompt_security"]["explanation"],
+        "ml_prediction": result["agents"]["prompt_security"]["ml_prediction"],
+        "rule_score":    result["agents"]["prompt_security"]["rule_based_score"],
+        "ml_score":      result["agents"]["prompt_security"]["ml_score"],
+        "sem_score":     result["agents"]["prompt_security"]["semantic_score"],
+        "obf_score":     result["agents"]["prompt_security"]["obfuscation_score"],
+    })
+    return result
+
+
+@app.get("/soc/correlate")
+def soc_correlate():
+    """
+    Return global threat correlation state: attack patterns, active sessions,
+    velocity metrics, and overall threat level.
+    """
+    return _get_soc().correlate()
+
+
+@app.get("/soc/report")
+def soc_report(session_id: Optional[str] = None, format: str = Query("markdown", enum=["markdown"])):
+    """
+    Generate a forensic investigation report from the event store.
+    Optionally scoped to a specific session.
+    """
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(_get_soc().get_report(session_id=session_id))
+
+
+@app.get("/soc/timeline")
+def soc_timeline(limit: int = Query(50, ge=1, le=200)):
+    """Return the chronological attack timeline from the forensics event store."""
+    return _get_soc().get_timeline(limit=limit)
+
+
+@app.post("/soc/simulate")
+def soc_simulate(req: SOCSimulateRequest):
+    """
+    Run the Adversary Simulation Agent: generate adversarial attacks, feed them
+    through the detection pipeline, and store all events in the forensics store.
+    """
+    return _get_soc().simulate(
+        strategy=req.strategy or "all",
+        n=min(req.n or 8, 30),
+        goal=req.goal or "bypass safety restrictions",
+    )
+
+
+@app.get("/soc/agents/status")
+def soc_agents_status():
+    """Return the live status of all 5 AuroraSOC agents."""
+    return _get_soc().agents_status()
+
+
+@app.delete("/soc/events")
+def soc_clear_events():
+    """Clear the SOC event store (forensics data)."""
+    from .agents.shared_memory import EventStore
+    EventStore.get().clear()
+    return {"message": "SOC event store cleared."}
