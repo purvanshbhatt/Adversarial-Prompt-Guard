@@ -644,137 +644,514 @@ elif page == "🔄 Simulation Mode":
 # PAGE: Agent Network
 # ════════════════════════════════════════════════════════════════════
 elif page == "🧠 Agent Network":
-    st.markdown("# 🧠 Agent Network")
-    st.markdown(
-        "Live status of all **5 AuroraSOC AI agents**. Each agent is an autonomous "
-        "microservice with a specialized role in the security pipeline."
-    )
+    # ── SOC Command Center Header ─────────────────────────────────────────────
+    st.markdown("""
+<div style='background:linear-gradient(135deg,rgba(163,113,247,0.12),rgba(88,166,255,0.06));
+border:1px solid rgba(163,113,247,0.35);border-radius:16px;padding:20px 28px;margin-bottom:16px'>
+<h1 style='margin:0;color:#e6edf3;font-size:26px'>🧠 AuroraSOC — Multi-Agent Command Center</h1>
+<p style='margin:4px 0 0;color:#8b949e;font-size:14px'>
+5 autonomous AI agents · Cross-agent message bus · Full attack lifecycle simulation · Persistent forensics store
+</p></div>""", unsafe_allow_html=True)
 
-    ag = soc_get("/agents/status")
-    if "error" in ag:
-        st.error(f"Could not reach SOC API: {ag['error']}")
-    else:
-        plat = ag.get("platform", "AuroraSOC")
-        ver  = ag.get("version", "2.0.0")
-        ts   = ag.get("timestamp", "")[:19].replace("T", " ")
+    # ── Live platform metrics ──────────────────────────────────────────────────
+    ag      = soc_get("/agents/status")
+    bus_stats = api_get("/agents/message_stats")
+    tl_data = soc_get("/timeline", {"limit": 5})
+    soc_evts = tl_data.get("timeline", [])
+    store_total = len(soc_evts)
 
-        st.markdown(
-            f"<div style='background:rgba(163,113,247,0.1);border:1px solid rgba(163,113,247,0.3);"
-            f"border-radius:12px;padding:12px 20px;margin-bottom:16px'>"
-            f"<span style='color:#a371f7;font-weight:700'>{plat} v{ver}</span>"
-            f"<span style='color:#8b949e;font-size:12px;margin-left:16px'>Last polled: {ts}</span>"
-            f"</div>", unsafe_allow_html=True)
+    bus_total  = bus_stats.get("total_messages", 0)
+    bus_agents = bus_stats.get("active_agents", 0)
+    plat = ag.get("platform", "AuroraSOC") if "error" not in ag else "AuroraSOC"
+    ver  = ag.get("version", "2.0.0")      if "error" not in ag else "2.0.0"
 
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    mc1.metric("Platform", f"{plat} v{ver}")
+    mc2.metric("Bus Messages", bus_total)
+    mc3.metric("Active Agents", bus_agents if bus_agents else "5")
+    mc4.metric("SOC Events", store_total)
+
+    st.divider()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Tabs
+    # ═══════════════════════════════════════════════════════════════════════════
+    tab_agents, tab_lifecycle, tab_bus, tab_timeline, tab_tools = st.tabs([
+        "🤖 Agent Grid",
+        "🔄 Lifecycle Sim",
+        "📡 Message Bus",
+        "🕐 Timeline",
+        "🔧 Tools",
+    ])
+
+    # ── Tab 1: Agent Grid ─────────────────────────────────────────────────────
+    with tab_agents:
         agent_meta = {
             "prompt_security": {
-                "icon": "🔍",
-                "color": "#58a6ff",
+                "icon": "🔍", "color": "#58a6ff",
                 "role": "First-line threat detector",
-                "desc": "Runs the multi-layer detection pipeline (rule-based, ML, semantic, obfuscation) on every incoming prompt.",
+                "desc": "Runs the 5-layer detection pipeline (rule-based, ML, semantic, obfuscation, ensemble) on every incoming prompt.",
                 "inputs": "Raw LLM prompt",
-                "outputs": "Risk score, attack types, layer breakdown",
+                "outputs": "Risk score (0-100), attack types, layer breakdown",
+                "endpoint": "/soc/analyze",
+                "msgs_key": "prompt_security",
             },
             "threat_correlation": {
-                "icon": "🤝",
-                "color": "#d29922",
+                "icon": "🤝", "color": "#d29922",
                 "role": "Cross-event pattern analyst",
                 "desc": "Correlates events across sessions and time windows to detect coordinated attacks, velocity spikes, and risk escalation.",
                 "inputs": "Session ID, event store",
-                "outputs": "Correlation insights, campaign detection",
+                "outputs": "Correlation insights, campaign detection, velocity score",
+                "endpoint": "/soc/correlate",
+                "msgs_key": "threat_correlation",
             },
             "risk_scoring": {
-                "icon": "📊",
-                "color": "#f85149",
+                "icon": "📊", "color": "#f85149",
                 "role": "Enterprise risk quantifier",
                 "desc": "Combines ML/rule/semantic/obfuscation scores with session behavior and correlation signals into a final enterprise risk score.",
                 "inputs": "Prompt Security + Correlation results",
-                "outputs": "Enterprise risk score, risk level, recommended action",
+                "outputs": "Enterprise risk score (0-100), risk level, recommended action",
+                "endpoint": "internal",
+                "msgs_key": "risk_scoring",
             },
             "adversary_simulation": {
-                "icon": "⚔️",
-                "color": "#a371f7",
+                "icon": "⚔️", "color": "#a371f7",
                 "role": "Red team AI",
-                "desc": "Autonomously generates adversarial attack prompts using 4 strategies and 32 templates, feeding them into the detection pipeline to measure robustness.",
-                "inputs": "Strategy config, goals",
-                "outputs": "Attack corpus, bypass list, robustness score",
+                "desc": "Generates adversarial attack prompts using 4 strategies and 100+ templates, mutates them until bypass, then feeds them through the pipeline.",
+                "inputs": "Strategy config, category, goal",
+                "outputs": "Attack corpus, bypass list, robustness score, mutation trace",
+                "endpoint": "/soc/simulate",
+                "msgs_key": "adversary",
             },
             "forensics": {
-                "icon": "🔬",
-                "color": "#3fb950",
+                "icon": "🔬", "color": "#3fb950",
                 "role": "Event storage & investigation",
-                "desc": "Stores all security events in the persistent event store, builds attack timelines, and generates forensic investigation reports.",
+                "desc": "Stores all SecurityEvents in the persistent JSON event store, builds attack timelines, and generates forensic investigation reports.",
                 "inputs": "SecurityEvent objects from orchestrator",
                 "outputs": "Timeline, forensic reports, event statistics",
+                "endpoint": "/soc/timeline",
+                "msgs_key": "forensics",
             },
         }
 
-        agents = ag.get("agents", [])
-        for i in range(0, len(agents), 2):
-            row_agents = agents[i:i+2]
-            cols = st.columns(len(row_agents))
-            for col, agent in zip(cols, row_agents):
-                aname = agent.get("agent", "")
-                meta = agent_meta.get(aname, {})
-                ac = meta.get("color", "#8b949e")
+        by_agent = bus_stats.get("by_agent", {})
+        agents = ag.get("agents", []) if "error" not in ag else []
+
+        for i in range(0, max(len(agents), 5), 2):
+            row_names = list(agent_meta.keys())[i:i+2]
+            cols = st.columns(len(row_names))
+            for col, aname in zip(cols, row_names):
+                meta = agent_meta[aname]
+                ac   = meta["color"]
+                agent_obj = next((a for a in agents if a.get("agent") == aname), {})
+                msg_count  = by_agent.get(meta["msgs_key"], 0)
                 with col:
                     st.markdown(
-                        f"<div style='background:rgba(0,0,0,.3);border:1px solid {ac}50;"
-                        f"border-radius:14px;padding:18px;height:100%'>"
-                        f"<div style='font-size:28px'>{meta.get('icon','🤖')}</div>"
-                        f"<div style='font-size:15px;font-weight:700;color:{ac};margin-top:6px'>"
-                        f"{aname.replace('_',' ').title()}</div>"
-                        f"<div style='font-size:11px;color:#8b949e;font-style:italic'>{meta.get('role','')}</div>"
-                        f"<div style='margin-top:10px;font-size:12px;color:#c9d1d9'>{meta.get('desc','')}</div>"
-                        f"<div style='margin-top:12px;font-size:11px'>"
-                        f"<span style='color:#8b949e'>Version:</span> "
-                        f"<code style='font-size:10px'>{agent.get('version','1.0.0')}</code></div>"
-                        f"<div style='font-size:11px'>"
-                        f"<span style='color:#8b949e'>Inputs:</span> "
-                        f"<span style='color:#c9d1d9'>{meta.get('inputs','—')}</span></div>"
-                        f"<div style='font-size:11px'>"
-                        f"<span style='color:#8b949e'>Outputs:</span> "
-                        f"<span style='color:#c9d1d9'>{meta.get('outputs','—')}</span></div>"
-                        f"<div style='margin-top:10px'>"
+                        f"<div style='background:rgba(0,0,0,.35);border:1px solid {ac}55;"
+                        f"border-radius:14px;padding:18px;margin-bottom:10px'>"
+                        f"<div style='display:flex;justify-content:space-between;align-items:center'>"
+                        f"<span style='font-size:28px'>{meta['icon']}</span>"
                         f"<span style='background:rgba(63,185,80,0.15);border:1px solid #3fb950;"
                         f"color:#3fb950;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:600'>"
                         f"● ONLINE</span></div>"
+                        f"<div style='font-size:15px;font-weight:700;color:{ac};margin-top:8px'>"
+                        f"{aname.replace('_',' ').title()}</div>"
+                        f"<div style='font-size:11px;color:#8b949e;font-style:italic'>{meta['role']}</div>"
+                        f"<div style='margin-top:10px;font-size:12px;color:#c9d1d9'>{meta['desc']}</div>"
+                        f"<div style='margin-top:12px;display:flex;gap:16px;font-size:11px'>"
+                        f"<span><span style='color:#8b949e'>Version:</span> "
+                        f"<code style='font-size:10px'>{agent_obj.get('version','1.0.0')}</code></span>"
+                        f"<span><span style='color:#8b949e'>Messages:</span> "
+                        f"<span style='color:{ac};font-weight:700'>{msg_count}</span></span></div>"
+                        f"<div style='margin-top:8px;font-size:11px'>"
+                        f"<span style='color:#8b949e'>In →</span> "
+                        f"<span style='color:#c9d1d9'>{meta['inputs']}</span></div>"
+                        f"<div style='font-size:11px'>"
+                        f"<span style='color:#8b949e'>Out →</span> "
+                        f"<span style='color:#c9d1d9'>{meta['outputs']}</span></div>"
+                        f"<div style='margin-top:10px;font-size:10px;color:#484f58'>"
+                        f"Endpoint: <code style='color:#30363d'>{meta['endpoint']}</code></div>"
                         f"</div>", unsafe_allow_html=True)
 
         st.divider()
-        st.markdown("### Agent Pipeline Flow")
-        st.markdown("""
-```
+        st.markdown("### Pipeline Architecture")
+        st.code("""
 User Prompt
      │
      ▼
-┌─────────────────────┐
-│  Prompt Security    │ ← Rule-based + ML + Semantic + Obfuscation
-│       Agent         │
-└──────────┬──────────┘
-           │ risk_score, attack_types
-           ▼
-┌─────────────────────┐    ┌─────────────────────┐
-│ Threat Correlation  │    │   Risk Scoring      │
-│       Agent         │───▶│       Agent         │
-└──────────┬──────────┘    └──────────┬──────────┘
-           │ correlation_insights      │ enterprise_risk_score
-           └──────────────┬───────────┘
-                          │
-                          ▼
-              ┌─────────────────────┐
-              │  Forensics Agent   │ ← Stores event, builds timeline
-              └──────────┬─────────┘
-                         │ event_id, timeline_count
-                         ▼
-              ┌─────────────────────┐
-              │    Orchestrator    │ ← Unified verdict + recommended action
-              └─────────────────────┘
-```
-""")
-        st.markdown("**Adversary Simulation Agent** runs independently via `/soc/simulate` to probe the pipeline.")
+┌─────────────────────────────────────────────────────┐
+│  🔍 Prompt Security Agent                           │
+│  Rule-based → ML → Semantic → Obfuscation → Ensemble│
+│  Output: risk_score, attack_types, layer_breakdown  │
+└────────────────────┬────────────────────────────────┘
+                     │ DETECTION_RESULT (message bus)
+          ┌──────────┴──────────┐
+          ▼                     ▼
+┌─────────────────┐   ┌──────────────────────┐
+│ 🤝 Threat       │   │  📊 Risk Scoring     │
+│ Correlation     │──▶│  Agent               │
+│ Agent           │   │  enterprise_risk 0-100│
+└─────────────────┘   └──────────┬───────────┘
+  CORRELATION_UPDATE              │ RISK_VERDICT
+                        ┌─────────┴────────────┐
+                        ▼                      ▼
+             ┌────────────────┐    ┌────────────────────┐
+             │ 🔬 Forensics  │    │ 📡 SIEM / Elastic  │
+             │ Agent          │    │ indexing + alerting│
+             │ EventStore     │    └────────────────────┘
+             └────────────────┘
+                     ▲
+                     │ ADVERSARY_ATTACK (when bypassed)
+             ┌───────┴────────┐
+             │ ⚔️ Adversary   │
+             │ Simulation     │
+             │ Agent          │
+             └────────────────┘
+""", language="text")
 
-    if st.button("🔄 Refresh Agent Status", key="ag_refresh"):
-        st.rerun()
+    # ── Tab 2: Attack Lifecycle Simulation ───────────────────────────────────
+    with tab_lifecycle:
+        st.markdown("### Full Attack Lifecycle Simulation")
+        st.markdown(
+            "Simulate the complete attack lifecycle end-to-end: "
+            "**Injection → Detection → Bypass Attempt → Re-detection → SIEM Logging → Elastic Index → Forensics Store**. "
+            "Every stage publishes to the cross-agent message bus in real time."
+        )
+
+        lc_col1, lc_col2 = st.columns([2, 1])
+        with lc_col1:
+            with st.form("lifecycle_form"):
+                cats = [
+                    "instruction_override", "jailbreak", "data_exfiltration",
+                    "code_injection", "role_play", "prompt_leaking",
+                    "indirect_injection", "policy_bypass",
+                ]
+                lc_cat = st.selectbox("Attack Category", ["auto (random)"] + cats)
+                lc_complexity = st.radio("Complexity", ["low", "medium", "high"], index=2, horizontal=True)
+                lc_mutations  = st.slider("Max Mutation Rounds", 1, 8, 4)
+                run_lifecycle  = st.form_submit_button("🚀 Run Lifecycle Simulation", use_container_width=True)
+
+        if run_lifecycle:
+            payload = {
+                "complexity":    lc_complexity,
+                "max_mutations": lc_mutations,
+            }
+            if lc_cat != "auto (random)":
+                payload["category"] = lc_cat
+
+            with st.spinner("Simulating full attack lifecycle…"):
+                lc_result = api_post("/lifecycle/simulate", payload, timeout=60)
+
+            if "error" in lc_result:
+                st.error(lc_result["error"])
+            else:
+                st.session_state["last_lifecycle"] = lc_result
+                st.rerun()
+
+        lc = st.session_state.get("last_lifecycle")
+        if lc:
+            bypassed    = lc.get("bypassed", False)
+            initial_risk = lc.get("initial_risk", 0)
+            final_risk   = lc.get("final_risk", 0)
+            verdict      = lc.get("verdict", "—")
+            action       = lc.get("action", "—")
+            muts         = lc.get("mutations_tried", 0)
+            session_id   = lc.get("session_id", "")
+
+            # Header banner
+            bypass_color = "#f85149" if bypassed else "#3fb950"
+            bypass_label = "⚠️ BYPASS SUCCEEDED" if bypassed else "✅ ATTACK CONTAINED"
+            st.markdown(
+                f"<div style='background:rgba(0,0,0,0.3);border:1px solid {bypass_color}55;"
+                f"border-radius:12px;padding:14px 20px;margin:8px 0'>"
+                f"<span style='font-size:15px;font-weight:700;color:{bypass_color}'>{bypass_label}</span>"
+                f"<span style='color:#8b949e;font-size:12px;margin-left:16px'>session: {session_id}</span>"
+                f"</div>", unsafe_allow_html=True)
+
+            lc_m1, lc_m2, lc_m3, lc_m4, lc_m5 = st.columns(5)
+            lc_m1.metric("Initial Risk",  f"{initial_risk:.1f}")
+            lc_m2.metric("Final Risk",    f"{final_risk:.1f}")
+            lc_m3.metric("Verdict",       verdict)
+            lc_m4.metric("Action",        action)
+            lc_m5.metric("Mutations",     muts)
+
+            st.divider()
+            st.markdown("#### Lifecycle Trace")
+            STAGE_COLORS = {
+                "injection":       "#a371f7",
+                "detection":       "#58a6ff",
+                "bypass_attempt":  "#d29922",
+                "bypass_success":  "#f85149",
+                "bypass_skip":     "#3fb950",
+                "re_detection":    "#58a6ff",
+                "risk_verdict":    "#f85149",
+                "siem_logging":    "#e3b341",
+                "elastic_index":   "#f472b6",
+                "forensics_stored":"#3fb950",
+            }
+            STAGE_ICONS = {
+                "injection":       "💉",
+                "detection":       "🔍",
+                "bypass_attempt":  "⚔️",
+                "bypass_success":  "🚨",
+                "bypass_skip":     "✅",
+                "re_detection":    "🔍",
+                "risk_verdict":    "📊",
+                "siem_logging":    "📡",
+                "elastic_index":   "🔎",
+                "forensics_stored":"🔬",
+            }
+            for step in lc.get("trace", []):
+                stage   = step.get("stage", "")
+                agent   = step.get("agent", "")
+                detail  = step.get("detail", "")
+                elapsed = step.get("elapsed", 0)
+                sc      = STAGE_COLORS.get(stage, "#8b949e")
+                si      = STAGE_ICONS.get(stage, "▶")
+                st.markdown(
+                    f"<div style='border-left:3px solid {sc};padding:6px 12px;margin:4px 0;"
+                    f"background:rgba(0,0,0,0.2);border-radius:0 8px 8px 0'>"
+                    f"<span style='color:{sc};font-weight:700'>{si} {stage.replace('_',' ').upper()}</span>"
+                    f"<span style='color:#8b949e;font-size:11px;margin-left:12px'>[{agent}] +{elapsed:.3f}s</span>"
+                    f"<div style='font-size:12px;color:#c9d1d9;margin-top:2px'>{detail}</div>"
+                    f"</div>", unsafe_allow_html=True)
+
+            # Prompt evolution
+            st.divider()
+            st.markdown("#### Prompt Evolution")
+            pc1, pc2 = st.columns(2)
+            with pc1:
+                st.markdown("**Original Attack**")
+                st.code(lc.get("initial_prompt", "—"), language="text")
+            with pc2:
+                st.markdown("**Final Prompt (post-mutation)**")
+                st.code(lc.get("final_prompt", "—"), language="text")
+        else:
+            st.info("Run the lifecycle simulation above to see the end-to-end attack trace.")
+
+    # ── Tab 3: Cross-Agent Message Bus ───────────────────────────────────────
+    with tab_bus:
+        st.markdown("### Cross-Agent Message Bus")
+        st.markdown(
+            "Live feed of all structured messages exchanged between agents. "
+            "Published automatically during analyses, simulations, and lifecycle runs."
+        )
+
+        bus_col1, bus_col2, bus_col3 = st.columns([1, 1, 2])
+        msg_limit  = bus_col1.slider("Messages to show", 10, 200, 50)
+        filter_agent = bus_col2.selectbox("Filter agent", [
+            "All", "prompt_security", "threat_correlation", "risk_scoring",
+            "adversary", "forensics", "siem", "elastic", "lifecycle", "orchestrator"
+        ])
+        filter_type  = bus_col3.selectbox("Filter type", [
+            "All", "DETECTION_RESULT", "CORRELATION_UPDATE", "RISK_VERDICT",
+            "ALERT_RAISED", "MITIGATION_ACTION", "LIFECYCLE_EVENT",
+            "FORENSICS_STORED", "SIEM_FORWARDED", "ELASTIC_INDEXED",
+            "ADVERSARY_ATTACK", "BYPASS_DETECTED"
+        ])
+
+        msg_params = {"limit": msg_limit}
+        if filter_agent != "All":
+            msg_params["agent"] = filter_agent
+        if filter_type != "All":
+            msg_params["type"] = filter_type
+
+        msgs_data = api_get("/agents/messages", params=msg_params)
+        messages  = msgs_data.get("messages", [])
+
+        SEV_COLORS = {"CRITICAL": "#f85149", "HIGH": "#d29922", "MEDIUM": "#58a6ff",
+                      "INFO": "#3fb950", "LOW": "#8b949e"}
+
+        if messages:
+            # Stats bar
+            type_counts: dict = {}
+            for m in messages:
+                t = m.get("msg_type", "?")
+                type_counts[t] = type_counts.get(t, 0) + 1
+
+            tc_df = pd.DataFrame([
+                {"Type": t.replace("_"," "), "Count": c}
+                for t, c in sorted(type_counts.items(), key=lambda x: -x[1])
+            ])
+            fig_tc = px.bar(tc_df, x="Count", y="Type", orientation="h",
+                            color="Count", color_continuous_scale="Blues",
+                            template="plotly_dark", height=max(120, len(type_counts)*28))
+            fig_tc.update_layout(paper_bgcolor="rgba(0,0,0,0)",
+                                 plot_bgcolor="rgba(0,0,0,0)",
+                                 coloraxis_showscale=False,
+                                 margin=dict(l=10,r=10,t=5,b=5))
+            st.plotly_chart(fig_tc, use_container_width=True)
+            st.divider()
+
+            for m in messages:
+                sender   = m.get("sender", "?")
+                receiver = m.get("receiver", "?")
+                mtype    = m.get("msg_type", "?")
+                sev      = m.get("severity", "INFO")
+                ts_epoch = m.get("timestamp", 0)
+                ts_str   = datetime.fromtimestamp(ts_epoch).strftime("%H:%M:%S") if ts_epoch else "—"
+                scolor   = m.get("sender_color", "#8b949e")
+                tcolor   = m.get("type_color", "#8b949e")
+                sicon    = m.get("sender_icon", "🤖")
+                sev_c    = SEV_COLORS.get(sev, "#8b949e")
+                payload  = m.get("payload", {})
+
+                payload_preview = ", ".join(
+                    f"{k}={str(v)[:30]}" for k, v in list(payload.items())[:3]
+                )
+                st.markdown(
+                    f"<div style='background:rgba(0,0,0,0.25);border-left:3px solid {tcolor};"
+                    f"border-radius:0 8px 8px 0;padding:6px 12px;margin:3px 0;display:flex;"
+                    f"align-items:center;gap:8px'>"
+                    f"<span style='font-size:12px;color:#484f58;min-width:60px'>{ts_str}</span>"
+                    f"<span style='color:{scolor};font-weight:700;font-size:12px'>{sicon} {sender}</span>"
+                    f"<span style='color:#484f58'>→</span>"
+                    f"<span style='color:#8b949e;font-size:12px'>{receiver}</span>"
+                    f"<span style='background:rgba(0,0,0,0.4);border:1px solid {tcolor}55;"
+                    f"color:{tcolor};padding:1px 6px;border-radius:6px;font-size:10px;font-weight:600;"
+                    f"margin-left:8px'>{mtype}</span>"
+                    f"<span style='background:rgba(0,0,0,0.3);border:1px solid {sev_c}33;"
+                    f"color:{sev_c};padding:1px 6px;border-radius:6px;font-size:10px;margin-left:4px'>{sev}</span>"
+                    f"<span style='color:#484f58;font-size:11px;margin-left:8px'>{payload_preview}</span>"
+                    f"</div>", unsafe_allow_html=True)
+        else:
+            st.info("No messages yet. Run an analysis, lifecycle simulation, or adversary sim to populate the bus.")
+
+        if st.button("🗑️ Clear Message Bus", key="clear_bus"):
+            api_post("/agents/messages", payload={})
+            try:
+                requests.delete(f"{API_BASE}/agents/messages", timeout=5)
+                st.success("Bus cleared.")
+                st.rerun()
+            except Exception:
+                pass
+
+    # ── Tab 4: SOC Event Timeline ─────────────────────────────────────────────
+    with tab_timeline:
+        st.markdown("### SOC Event Timeline")
+        tl_limit   = st.slider("Events to load", 10, 200, 50, key="net_tl_limit")
+        tl_full    = soc_get("/timeline", {"limit": tl_limit})
+        tl_events  = tl_full.get("timeline", [])
+
+        if tl_events:
+            # Risk score over time chart
+            risk_vals = [e.get("enterprise_risk_score", 0) for e in reversed(tl_events)]
+            ts_vals   = [e.get("timestamp","")[:19].replace("T"," ") for e in reversed(tl_events)]
+            fig_tl = go.Figure()
+            fig_tl.add_trace(go.Scatter(
+                x=ts_vals, y=risk_vals, mode="lines+markers",
+                line=dict(color="#a371f7", width=2),
+                marker=dict(
+                    color=["#f85149" if r>75 else "#d29922" if r>40 else "#3fb950" for r in risk_vals],
+                    size=8,
+                ),
+                name="Enterprise Risk",
+                fill="tozeroy", fillcolor="rgba(163,113,247,0.08)",
+            ))
+            fig_tl.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font={"color":"#e6edf3"},
+                xaxis={"tickangle":-45, "gridcolor":"#21262d", "color":"#8b949e"},
+                yaxis={"gridcolor":"#21262d", "color":"#8b949e", "range":[0,105]},
+                height=240, margin=dict(l=10,r=10,t=10,b=10),
+            )
+            st.plotly_chart(fig_tl, use_container_width=True)
+
+            # Agent breakdown
+            agent_counts: dict = {}
+            for e in tl_events:
+                ag_name = e.get("agent", "unknown")
+                agent_counts[ag_name] = agent_counts.get(ag_name, 0) + 1
+            sev_counts: dict = {}
+            for e in tl_events:
+                sv = e.get("severity", "INFO")
+                sev_counts[sv] = sev_counts.get(sv, 0) + 1
+
+            bc1, bc2 = st.columns(2)
+            with bc1:
+                st.markdown("**By Agent**")
+                for an, cnt in sorted(agent_counts.items(), key=lambda x:-x[1]):
+                    st.markdown(f"<span style='color:#8b949e'>{an}</span> **{cnt}**", unsafe_allow_html=True)
+            with bc2:
+                st.markdown("**By Severity**")
+                SEV_C = {"CRITICAL":"#f85149","HIGH":"#d29922","MEDIUM":"#58a6ff","LOW":"#3fb950","INFO":"#8b949e"}
+                for sv, cnt in sorted(sev_counts.items(), key=lambda x: -["INFO","LOW","MEDIUM","HIGH","CRITICAL"].index(x[0]) if x[0] in ["INFO","LOW","MEDIUM","HIGH","CRITICAL"] else 0):
+                    color = SEV_C.get(sv, "#8b949e")
+                    st.markdown(f"<span style='color:{color};font-weight:600'>{sv}</span> {cnt}", unsafe_allow_html=True)
+
+            st.divider()
+            for ev in tl_events[:30]:
+                sev      = ev.get("severity", "INFO")
+                score    = ev.get("enterprise_risk_score", 0.0)
+                ts       = ev.get("timestamp", "")[:19].replace("T", " ")
+                is_mal   = ev.get("is_malicious", False)
+                preview  = ev.get("prompt_preview", ev.get("prompt", ""))[:80]
+                agent_n  = ev.get("agent", "—")
+                icon     = "🔴" if is_mal else "🟢"
+                sev_c    = SEV_C.get(sev, "#8b949e")
+                st.markdown(
+                    f"<div style='border-left:3px solid {sev_c};padding:4px 10px;margin:3px 0;"
+                    f"background:rgba(0,0,0,0.2);border-radius:0 6px 6px 0'>"
+                    f"{icon} <span style='color:{sev_c};font-weight:600'>{sev}</span>"
+                    f" <code style='font-size:10px;color:#8b949e'>{ts}</code>"
+                    f" | risk: <span style='font-weight:700'>{score:.1f}</span>"
+                    f" | <span style='color:#8b949e'>{agent_n}</span>"
+                    f" | <span style='color:#c9d1d9'>{preview}</span>"
+                    f"</div>", unsafe_allow_html=True)
+        else:
+            st.info("No SOC events yet. Run an analysis or lifecycle simulation to populate the timeline.")
+
+    # ── Tab 5: Tools ─────────────────────────────────────────────────────────
+    with tab_tools:
+        st.markdown("### Agent Toolbox")
+        t_col1, t_col2 = st.columns(2)
+
+        with t_col1:
+            st.markdown("#### Quick Analysis")
+            quick_prompt = st.text_area("Prompt to analyze", height=80, key="net_quick_prompt",
+                                        placeholder="Enter a prompt to run through all 5 agents…")
+            if st.button("🔍 Analyze via Agent Pipeline", use_container_width=True, key="net_analyze"):
+                if quick_prompt.strip():
+                    with st.spinner("Running multi-agent analysis…"):
+                        r = soc_post("/analyze", {"prompt": quick_prompt, "session_id": None})
+                    if "error" in r:
+                        st.error(r["error"])
+                    else:
+                        score  = r.get("enterprise_risk_score", 0)
+                        level  = r.get("risk_level", "—")
+                        action = r.get("recommended_action", "—")
+                        verdict_color = "#f85149" if score > 75 else "#d29922" if score > 40 else "#3fb950"
+                        st.markdown(
+                            f"<div style='background:rgba(0,0,0,0.3);border:1px solid {verdict_color}55;"
+                            f"border-radius:10px;padding:12px 18px'>"
+                            f"<span style='font-size:20px;font-weight:700;color:{verdict_color}'>{score:.1f}</span>"
+                            f"<span style='color:#8b949e;margin-left:10px'>{level}</span>"
+                            f"<div style='color:#c9d1d9;margin-top:4px'>Action: <strong>{action}</strong></div>"
+                            f"</div>", unsafe_allow_html=True)
+
+        with t_col2:
+            st.markdown("#### System Actions")
+            if st.button("🔄 Refresh All", use_container_width=True, key="net_refresh"):
+                st.rerun()
+            st.markdown("")
+            if st.button("🗑️ Clear SOC Event Store", use_container_width=True, key="net_clear_events"):
+                try:
+                    requests.delete(f"{SOC_BASE}/events", timeout=5)
+                    st.success("SOC event store cleared.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+            st.markdown("")
+            if st.button("📥 Export SOC Timeline (JSON)", use_container_width=True, key="net_export"):
+                tl_all = soc_get("/timeline", {"limit": 500})
+                tl_dl  = tl_all.get("timeline", [])
+                st.download_button(
+                    "⬇️ Download timeline.json",
+                    data=json.dumps(tl_dl, indent=2),
+                    file_name="aurorasoc_timeline.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -2566,37 +2943,77 @@ elif page == "🌐 Real-World Eval":
 
     # ── Tab 1: Upload / Load ─────────────────────────────────────────
     with tab_upload:
-        st.markdown("### Option A — Upload Your Own CSV")
+        st.markdown("### Option A — Upload Your Own Dataset (CSV or JSON)")
         st.markdown(
-            "Required columns: **`prompt`** (or `text`/`content`) + **`label`** (0/1 or `benign`/`malicious`). "
-            "Optional: `category` column."
+            "Required: **`prompt`** (or `text`/`content`) + **`label`** (0/1 or `benign`/`malicious`). "
+            "Optional: `category` column. "
+            "**JSON** — accepts array of objects or HuggingFace `{\"data\":[...]}` / `{\"train\":[...]}` format."
         )
 
-        uploaded_file = st.file_uploader(
-            "Drop a CSV file here",
-            type=["csv"],
-            label_visibility="collapsed",
-        )
-        if uploaded_file is not None:
-            with st.spinner("Uploading and validating…"):
-                try:
-                    r = requests.post(
-                        f"{API_BASE}/upload_dataset",
-                        files={"file": (uploaded_file.name, uploaded_file.getvalue(), "text/csv")},
-                        timeout=30,
-                    )
-                    result = r.json()
-                    if r.status_code == 200:
-                        st.success(f"✅ {result['message']}")
-                        ds = result.get("dataset", {})
-                        c1,c2,c3 = st.columns(3)
-                        c1.metric("Total Prompts", ds.get("total", 0))
-                        c2.metric("Malicious",     ds.get("malicious", 0))
-                        c3.metric("Benign",        ds.get("benign", 0))
-                    else:
-                        st.error(f"Upload failed: {result.get('detail', r.text)}")
-                except Exception as e:
-                    st.error(f"Upload error: {e}")
+        up_format = st.radio("File Format", ["CSV", "JSON"], horizontal=True, key="rw_up_format")
+
+        if up_format == "CSV":
+            uploaded_file = st.file_uploader(
+                "Drop a CSV file here",
+                type=["csv"],
+                label_visibility="collapsed",
+                key="rw_csv_up",
+            )
+            if uploaded_file is not None:
+                with st.spinner("Uploading and validating…"):
+                    try:
+                        r = requests.post(
+                            f"{API_BASE}/upload_dataset",
+                            files={"file": (uploaded_file.name, uploaded_file.getvalue(), "text/csv")},
+                            timeout=30,
+                        )
+                        result = r.json()
+                        if r.status_code == 200:
+                            st.success(f"✅ {result['message']}")
+                            ds = result.get("dataset", {})
+                            c1,c2,c3 = st.columns(3)
+                            c1.metric("Total Prompts", ds.get("total", 0))
+                            c2.metric("Malicious",     ds.get("malicious", 0))
+                            c3.metric("Benign",        ds.get("benign", 0))
+                        else:
+                            st.error(f"Upload failed: {result.get('detail', r.text)}")
+                    except Exception as e:
+                        st.error(f"Upload error: {e}")
+        else:
+            st.markdown("""
+<div style='background:rgba(88,166,255,0.08);border:1px solid rgba(88,166,255,0.25);
+border-radius:8px;padding:10px 14px;margin-bottom:8px;font-size:12px;color:#8b949e'>
+<strong style='color:#58a6ff'>Supported JSON schemas:</strong><br>
+• Array: <code>[{"prompt":"...", "label":1, "category":"jailbreak"}, ...]</code><br>
+• Wrapper: <code>{"data":[...], "train":[...], "test":[...]}</code><br>
+• Labels accepted: <code>0/1</code>, <code>true/false</code>, <code>"malicious"/"benign"</code>, <code>"injection"/"safe"</code>
+</div>""", unsafe_allow_html=True)
+            uploaded_json = st.file_uploader(
+                "Drop a JSON file here",
+                type=["json"],
+                label_visibility="collapsed",
+                key="rw_json_up",
+            )
+            if uploaded_json is not None:
+                with st.spinner("Uploading and converting JSON…"):
+                    try:
+                        r = requests.post(
+                            f"{API_BASE}/upload_dataset/json",
+                            files={"file": (uploaded_json.name, uploaded_json.getvalue(), "application/json")},
+                            timeout=30,
+                        )
+                        result = r.json()
+                        if r.status_code == 200:
+                            st.success(f"✅ {result['message']}")
+                            ds = result.get("dataset", {})
+                            c1,c2,c3 = st.columns(3)
+                            c1.metric("Total Prompts", ds.get("total", 0))
+                            c2.metric("Malicious",     ds.get("malicious", 0))
+                            c3.metric("Benign",        ds.get("benign", 0))
+                        else:
+                            st.error(f"Upload failed: {result.get('detail', r.text)}")
+                    except Exception as e:
+                        st.error(f"Upload error: {e}")
 
         st.divider()
         st.markdown("### Option B — Use Built-In Sample Dataset")
@@ -3492,115 +3909,521 @@ elif page == "📋 Logs":
 # PAGE: Benchmark & Metrics
 # ════════════════════════════════════════════════════════════════════
 elif page == "📈 Benchmark & Metrics":
-    st.markdown("# 📈 Benchmark, ISR & PIVS Metrics")
-    st.markdown(
-        "Compare all detection layers, compute the **Injection Success Rate (ISR)** "
-        "and **Prompt Injection Vulnerability Score (PIVS)** — two novel research metrics."
-    )
+    st.markdown("""
+<div style='background:linear-gradient(135deg,rgba(88,166,255,0.10),rgba(163,113,247,0.06));
+border:1px solid rgba(88,166,255,0.3);border-radius:16px;padding:20px 28px;margin-bottom:16px'>
+<h1 style='margin:0;color:#e6edf3;font-size:26px'>📈 AuroraSOC Benchmark Suite</h1>
+<p style='margin:4px 0 0;color:#8b949e;font-size:14px'>
+Synthetic · Real-World · Adversarial · Comparison — with ISR, PIVS, Generalization Gap &amp; Research Export
+</p></div>""", unsafe_allow_html=True)
 
-    tab1, tab2 = st.tabs(["🏁 Run Benchmark", "📊 Evaluation Metrics"])
+    bm_tab1, bm_tab2, bm_tab3, bm_tab4, bm_tab5 = st.tabs([
+        "🏁 Synthetic",
+        "🌐 Real-World",
+        "⚔️ Adversarial",
+        "📊 Comparison",
+        "📋 ML Evaluation",
+    ])
 
-    with tab1:
-        with st.form("bench_form"):
+    # ── Helpers shared across tabs ────────────────────────────────────────────
+    def _isr_pivs_block(isr: dict, pivs: dict):
+        st.divider()
+        st.markdown("#### Injection Success Rate (ISR)")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("ISR (Unprotected)", "100%")
+        c2.metric("ISR (Protected)",   f"{isr.get('isr_protected',1)*100:.1f}%")
+        c3.metric("ISR Reduction",     f"{isr.get('isr_reduction',0)*100:.1f}%")
+        c4.metric("Catch Rate",        f"{isr.get('catch_rate',0)*100:.1f}%")
+        if isr.get("per_category_isr"):
+            cat_df = pd.DataFrame([
+                {"Category": k.replace("_"," ").title(), "ISR": f"{v*100:.1f}%"}
+                for k, v in isr["per_category_isr"].items()
+            ])
+            st.dataframe(cat_df, use_container_width=True, hide_index=True)
+        st.divider()
+        st.markdown("#### Prompt Injection Vulnerability Score (PIVS)")
+        pivs_val = pivs.get("pivs", 0)
+        p1, p2 = st.columns(2)
+        p1.plotly_chart(gauge(pivs_val, title="PIVS (lower = safer)", height=220),
+                        use_container_width=True)
+        with p2:
+            tier = pivs.get("tier", "—")
+            TIER_BADGE = {"Low Risk":"badge-green","Moderate Risk":"badge-yellow",
+                          "High Risk":"badge-red","Critical Risk":"badge-red"}
+            st.markdown(
+                f"<span class='badge {TIER_BADGE.get(tier,'badge-blue')}' "
+                f"style='font-size:16px;padding:6px 18px'>{tier}</span>",
+                unsafe_allow_html=True)
+            st.markdown(f"**Interpretation:** {pivs.get('interpretation','—')}")
+            st.divider()
+            for sk, sv in pivs.get("sub_scores", {}).items():
+                st.markdown(f"**{sk.replace('_',' ').title()}:** {sv:.1f}/100")
+
+    def _metrics_bar_chart(metrics_dict: dict, title="", height=280):
+        m_keys = ["accuracy","precision","recall","f1"]
+        fig = go.Figure(go.Bar(
+            x=[k.title() for k in m_keys],
+            y=[metrics_dict.get(k, 0) for k in m_keys],
+            text=[f"{metrics_dict.get(k,0)*100:.1f}%" for k in m_keys],
+            textposition="outside",
+            marker_color=["#58a6ff","#a371f7","#d29922","#3fb950"],
+        ))
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font={"color":"#e6edf3"},
+            yaxis={"range":[0,1.15], "tickformat":".0%", "gridcolor":"#21262d"},
+            height=height, margin=dict(l=10,r=10,t=24,b=10),
+            title={"text": title, "font":{"color":"#e6edf3","size":13}},
+        )
+        return fig
+
+    # ── Tab 1: Synthetic ──────────────────────────────────────────────────────
+    with bm_tab1:
+        st.markdown("### 5-Layer Synthetic Benchmark")
+        st.markdown(
+            "Evaluates all detection layers (keyword, rule-based, ML, semantic, ensemble) "
+            "on a freshly generated synthetic dataset. Computes per-layer Accuracy/Precision/Recall/F1 "
+            "plus ISR and PIVS research metrics."
+        )
+        with st.form("bench_form_syn"):
             bench_size = st.slider("Benchmark Dataset Size", 100, 1000, 400, 50)
-            run_bench = st.form_submit_button("🚀 Run Full Benchmark (~15s)", use_container_width=True)
+            run_bench  = st.form_submit_button("🚀 Run Synthetic Benchmark (~15s)", use_container_width=True)
 
         if run_bench:
             with st.spinner(f"Running 5-layer benchmark on {bench_size} samples…"):
                 bench = api_post("/benchmark", {"dataset_size": bench_size}, timeout=120)
-
             if "error" in bench:
                 st.error(bench["error"])
             else:
-                # Save for report generation
-                import os, json as _json
-                bp = os.path.abspath("artifacts/apids/data/benchmark_results.json")
+                import os as _os, json as _json
+                _bp = _os.path.abspath("artifacts/apids/data/benchmark_results.json")
                 try:
-                    with open(bp, "w") as _f:
+                    with open(_bp, "w") as _f:
                         _json.dump(bench, _f, indent=2)
                 except Exception:
                     pass
+                st.session_state["syn_bench"] = bench
+                st.rerun()
 
-                st.success("✅ Benchmark complete!")
-                st.divider()
+        bench = st.session_state.get("syn_bench")
+        if bench:
+            st.success("✅ Benchmark complete!")
+            lm = bench.get("layer_metrics", {})
+            # Layer metrics table
+            st.markdown("#### Layer Performance Comparison")
+            df = pd.DataFrame([
+                {"Layer": k.replace("_"," ").title(),
+                 **{mk.capitalize(): f"{mv:.1%}" for mk, mv in v.items()}}
+                for k, v in lm.items()
+            ])
+            st.dataframe(df, use_container_width=True, hide_index=True)
 
-                # Layer metrics table
-                st.markdown("### Layer Performance Comparison")
-                lm = bench.get("layer_metrics", {})
-                df = pd.DataFrame([
-                    {"Layer": k.replace("_"," ").title(), **{mk.capitalize(): f"{mv:.1%}" for mk, mv in v.items()}}
-                    for k, v in lm.items()
-                ])
-                st.dataframe(df, use_container_width=True, hide_index=True)
+            # Radar chart
+            bm_metrics = ["accuracy","precision","recall","f1"]
+            layer_colors = {"keyword":"#8b949e","rule_based":"#d29922",
+                            "ml":"#58a6ff","semantic":"#3fb950","ensemble":"#f85149"}
+            fig_radar = go.Figure()
+            for layer, m in lm.items():
+                fig_radar.add_trace(go.Scatterpolar(
+                    r=[m.get(x, 0) for x in bm_metrics],
+                    theta=[x.capitalize() for x in bm_metrics],
+                    fill="toself", name=layer.replace("_"," ").title(),
+                    line_color=layer_colors.get(layer,"#58a6ff"),
+                ))
+            fig_radar.update_layout(
+                polar={"bgcolor":"#161b22",
+                       "radialaxis":{"color":"#8b949e","gridcolor":"#30363d"},
+                       "angularaxis":{"color":"#8b949e","gridcolor":"#30363d"}},
+                paper_bgcolor="rgba(0,0,0,0)", font={"color":"#e6edf3"},
+                legend={"font":{"color":"#e6edf3"}}, height=400,
+                margin=dict(l=10,r=10,t=10,b=10),
+            )
+            st.plotly_chart(fig_radar, use_container_width=True)
 
-                # Radar chart
-                metrics = ["accuracy","precision","recall","f1"]
-                layer_colors = {"keyword":"#8b949e","rule_based":"#d29922",
-                                "ml":"#58a6ff","semantic":"#3fb950","ensemble":"#f85149"}
-                fig = go.Figure()
-                for layer, m in lm.items():
-                    fig.add_trace(go.Scatterpolar(
-                        r=[m.get(x,0) for x in metrics],
-                        theta=[x.capitalize() for x in metrics],
-                        fill="toself", name=layer.replace("_"," ").title(),
-                        line_color=layer_colors.get(layer,"#58a6ff"),
-                    ))
-                fig.update_layout(
-                    polar={"bgcolor":"#161b22","radialaxis":{"color":"#8b949e","gridcolor":"#30363d"},
-                           "angularaxis":{"color":"#8b949e","gridcolor":"#30363d"}},
-                    paper_bgcolor="rgba(0,0,0,0)", font={"color":"#e6edf3"},
-                    legend={"font":{"color":"#e6edf3"}}, height=400,
-                    margin=dict(l=10,r=10,t=10,b=10),
-                )
-                st.plotly_chart(fig, use_container_width=True)
+            best_layer = bench.get("best_layer","ensemble").replace("_"," ").title()
+            st.success(f"🏆 Best layer: **{best_layer}** (by F1)")
 
-                best = bench.get("best_layer","ensemble").replace("_"," ").title()
-                st.success(f"🏆 Best layer: **{best}** (by F1)")
+            _isr_pivs_block(bench.get("isr", {}), bench.get("pivs", {}))
 
-                # ISR
-                st.divider()
-                st.markdown("### Injection Success Rate (ISR)")
-                isr = bench.get("isr", {})
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("ISR (Unprotected)", "100%")
-                c2.metric("ISR (Protected)",   f"{isr.get('isr_protected',1)*100:.1f}%")
-                c3.metric("ISR Reduction",      f"{isr.get('isr_reduction',0)*100:.1f}%")
-                c4.metric("Catch Rate",         f"{isr.get('catch_rate',0)*100:.1f}%")
+            # Download
+            st.divider()
+            st.download_button("📥 Export Synthetic Results (JSON)",
+                data=json.dumps(bench, indent=2),
+                file_name="aurorasoc_synthetic_benchmark.json", mime="application/json",
+                use_container_width=True)
 
-                if isr.get("per_category_isr"):
-                    st.markdown("**Per-Category ISR**")
-                    cat_df = pd.DataFrame([
-                        {"Category": k.replace("_"," ").title(), "ISR": f"{v*100:.1f}%"}
-                        for k, v in isr["per_category_isr"].items()
-                    ])
-                    st.dataframe(cat_df, use_container_width=True, hide_index=True)
+    # ── Tab 2: Real-World ─────────────────────────────────────────────────────
+    with bm_tab2:
+        st.markdown("### Real-World Dataset Benchmark")
+        st.markdown(
+            "Run on an externally uploaded dataset (CSV or JSON) to measure how well "
+            "the system generalises to prompts it was never trained on."
+        )
+        rw_info = api_get("/upload_dataset/info")
+        if rw_info.get("available"):
+            rw_c1, rw_c2, rw_c3, rw_c4 = st.columns(4)
+            rw_c1.metric("Loaded Prompts", rw_info.get("total", 0))
+            rw_c2.metric("Malicious",      rw_info.get("malicious", 0))
+            rw_c3.metric("Benign",         rw_info.get("benign", 0))
+            rw_c4.metric("Attack %",       f"{rw_info.get('label_balance',0)*100:.0f}%")
+        else:
+            st.info("No real-world dataset loaded. Use the **🌐 Real-World Eval** page to upload one or load the built-in sample.")
+            if st.button("📦 Quick-Load 60-Prompt Sample", use_container_width=True, key="bm_quick_sample"):
+                with st.spinner("Loading…"):
+                    api_post("/upload_dataset/sample")
+                st.rerun()
 
-                # PIVS
-                st.divider()
-                st.markdown("### Prompt Injection Vulnerability Score (PIVS)")
-                pivs = bench.get("pivs", {})
-                pivs_val = pivs.get("pivs", 0)
-                c1, c2 = st.columns(2)
-                c1.plotly_chart(gauge(pivs_val, title="PIVS (lower = safer)", height=220),
-                                use_container_width=True)
-                with c2:
-                    tier = pivs.get("tier","—")
-                    tier_colors = {
-                        "Low Risk":"badge-green","Moderate Risk":"badge-yellow",
-                        "High Risk":"badge-red","Critical Risk":"badge-red"
-                    }
-                    badge_cls = tier_colors.get(tier,"badge-blue")
+        with st.form("rw_bench_bm"):
+            rw_syn_size = st.slider("Synthetic comparison size", 100, 600, 300, 50)
+            rw_use_sample = st.checkbox("Auto-load sample if no dataset", value=not rw_info.get("available"))
+            run_rw = st.form_submit_button("🚀 Run Real-World Benchmark (~20s)", use_container_width=True)
+
+        if run_rw:
+            with st.spinner("Running benchmark on real-world dataset…"):
+                rw_result = api_post("/realworld_benchmark",
+                                     {"use_sample": rw_use_sample, "dataset_size": rw_syn_size},
+                                     timeout=180)
+            if "error" in rw_result:
+                st.error(rw_result.get("detail") or rw_result["error"])
+            else:
+                st.session_state["rw_bench"] = rw_result
+                st.rerun()
+
+        rw = st.session_state.get("rw_bench") or {}
+        if rw:
+            rw_m = rw.get("real_world", {}).get("metrics", {})
+            syn_m = rw.get("synthetic", {}).get("metrics", {})
+
+            st.success("✅ Real-World Benchmark complete!")
+            st.markdown("#### Synthetic vs Real-World Performance")
+
+            rw_metrics_list = ["accuracy","precision","recall","f1"]
+            fig_rw = go.Figure()
+            fig_rw.add_trace(go.Bar(name="Synthetic",
+                x=[m.title() for m in rw_metrics_list],
+                y=[syn_m.get(m, 0) for m in rw_metrics_list],
+                marker_color="#58a6ff",
+                text=[f"{syn_m.get(m,0)*100:.1f}%" for m in rw_metrics_list],
+                textposition="outside"))
+            fig_rw.add_trace(go.Bar(name="Real-World",
+                x=[m.title() for m in rw_metrics_list],
+                y=[rw_m.get(m, 0) for m in rw_metrics_list],
+                marker_color="#3fb950",
+                text=[f"{rw_m.get(m,0)*100:.1f}%" for m in rw_metrics_list],
+                textposition="outside"))
+            fig_rw.update_layout(
+                barmode="group",
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font={"color":"#e6edf3"},
+                yaxis={"range":[0,1.15], "tickformat":".0%", "gridcolor":"#21262d"},
+                height=300, margin=dict(l=10,r=10,t=10,b=10))
+            st.plotly_chart(fig_rw, use_container_width=True)
+
+            # Generalization gap
+            gap = rw.get("generalization_gap", {})
+            if gap:
+                st.markdown("#### Generalization Gap")
+                for gk, gv in gap.items():
+                    delta = gv.get("delta_f1", gv.get("delta", 0))
+                    dir_  = gv.get("direction", "—")
+                    color = "#f85149" if delta > 0.05 else "#3fb950" if delta <= 0.02 else "#d29922"
                     st.markdown(
-                        f"<span class='badge {badge_cls}' style='font-size:16px;padding:6px 18px'>"
-                        f"{tier}</span>", unsafe_allow_html=True)
-                    st.markdown(f"**Interpretation:** {pivs.get('interpretation','—')}")
-                    st.divider()
-                    sub = pivs.get("sub_scores", {})
-                    for key, val in sub.items():
-                        label = key.replace("_"," ").title()
-                        st.markdown(f"**{label}:** {val:.1f}/100")
+                        f"<div style='border-left:3px solid {color};padding:6px 12px;margin:4px 0;"
+                        f"background:rgba(0,0,0,0.2);border-radius:0 8px 8px 0'>"
+                        f"<span style='color:{color};font-weight:700'>ΔF1 = {delta*100:+.1f}%</span>"
+                        f" &nbsp; <span style='color:#8b949e'>{gk.replace('_',' ').title()}</span>"
+                        f" &nbsp; <span style='color:#c9d1d9'>{dir_}</span>"
+                        f"</div>", unsafe_allow_html=True)
 
-    with tab2:
+            _isr_pivs_block(
+                rw.get("real_world", {}).get("isr", {}),
+                rw.get("real_world", {}).get("pivs", {}),
+            )
+
+            # Export
+            st.divider()
+            rw_csv = api_get("/export_comparison")
+            if "csv" in rw_csv:
+                st.download_button("📥 Export Comparison CSV",
+                    data=rw_csv["csv"], file_name="aurorasoc_rw_comparison.csv",
+                    mime="text/csv", use_container_width=True)
+
+    # ── Tab 3: Adversarial ────────────────────────────────────────────────────
+    with bm_tab3:
+        st.markdown("### Adversarial Benchmark")
+        st.markdown(
+            "Generates attack prompts using the **100+ template bank**, then mutates each one "
+            "through up to N mutation strategies (Unicode swap, base64, role-play framing, etc.) "
+            "until it bypasses detection or exhausts all strategies. "
+            "Measures robustness against an **adaptive attacker**."
+        )
+
+        with st.form("adv_bench_form"):
+            adv_c1, adv_c2, adv_c3 = st.columns(3)
+            adv_n_attacks  = adv_c1.slider("# Attack prompts", 10, 150, 50)
+            adv_n_benign   = adv_c2.slider("# Benign prompts", 10, 80,  30)
+            adv_max_mut    = adv_c3.slider("Max mutation rounds", 1, 8, 4)
+            adv_complexity = st.radio("Attack complexity", ["low","medium","high"], index=2, horizontal=True)
+            run_adv        = st.form_submit_button("🚀 Run Adversarial Benchmark (~30s)", use_container_width=True)
+
+        if run_adv:
+            with st.spinner(f"Generating + mutating {adv_n_attacks} attacks ({adv_complexity})…"):
+                adv_result = api_post("/benchmark/adversarial", {
+                    "n_attacks":     adv_n_attacks,
+                    "n_benign":      adv_n_benign,
+                    "max_mutations": adv_max_mut,
+                    "complexity":    adv_complexity,
+                }, timeout=180)
+            if "error" in adv_result:
+                st.error(adv_result["error"])
+            else:
+                st.session_state["adv_bench"] = adv_result
+                st.rerun()
+
+        adv = st.session_state.get("adv_bench")
+        if adv:
+            st.success("✅ Adversarial Benchmark complete!")
+
+            # Top KPIs
+            adv_m = adv.get("metrics", {})
+            adv_k1, adv_k2, adv_k3, adv_k4, adv_k5, adv_k6 = st.columns(6)
+            adv_k1.metric("Accuracy",   f"{adv_m.get('accuracy',0)*100:.1f}%")
+            adv_k2.metric("Precision",  f"{adv_m.get('precision',0)*100:.1f}%")
+            adv_k3.metric("Recall",     f"{adv_m.get('recall',0)*100:.1f}%")
+            adv_k4.metric("F1",         f"{adv_m.get('f1',0)*100:.1f}%")
+            adv_k5.metric("Bypass Rate",f"{adv.get('bypass_rate',0):.1f}%")
+            adv_k6.metric("Avg Mutations", adv.get("avg_mutations", 0))
+
+            # Metrics chart
+            st.plotly_chart(_metrics_bar_chart(adv_m, "Adversarial Mode — Detection Metrics"), use_container_width=True)
+
+            # Mutation strategy effectiveness
+            strat_stats = adv.get("mutation_strategies", {})
+            if strat_stats:
+                st.markdown("#### Mutation Strategy Effectiveness")
+                strat_rows = []
+                for sk, sv in strat_stats.items():
+                    if isinstance(sv, dict):
+                        strat_rows.append({
+                            "Strategy":  sk.replace("_"," ").title(),
+                            "Attempts":  sv.get("attempts", 0),
+                            "Successes": sv.get("successes", 0),
+                            "Success Rate": f"{sv.get('success_rate', 0)*100:.1f}%",
+                        })
+                if strat_rows:
+                    st.dataframe(pd.DataFrame(strat_rows), use_container_width=True, hide_index=True)
+
+            # Bypass log
+            mut_log = adv.get("mutation_log", [])
+            if mut_log:
+                with st.expander(f"🔓 Bypass Cases ({sum(1 for m in mut_log if m.get('bypassed'))})"):
+                    for entry in mut_log:
+                        if entry.get("bypassed"):
+                            strats_used = ", ".join(entry.get("strategies", ["?"]))
+                            init_r  = entry.get("initial_risk", 0)
+                            final_r = entry.get("final_risk", 0)
+                            st.markdown(
+                                f"<div style='border-left:3px solid #f85149;padding:6px 12px;"
+                                f"margin:3px 0;background:rgba(248,81,73,0.05);border-radius:0 8px 8px 0'>"
+                                f"<span style='color:#f85149;font-weight:700'>BYPASSED</span> via "
+                                f"<code>{strats_used}</code> — "
+                                f"risk {init_r:.0f}→{final_r:.0f}<br>"
+                                f"<span style='color:#8b949e;font-size:11px'>{entry.get('original_prompt','')[:100]}</span>"
+                                f"</div>", unsafe_allow_html=True)
+
+            _isr_pivs_block(adv.get("isr", {}), adv.get("pivs", {}))
+
+            st.divider()
+            st.download_button("📥 Export Adversarial Results (JSON)",
+                data=json.dumps(adv, indent=2),
+                file_name="aurorasoc_adversarial_benchmark.json",
+                mime="application/json", use_container_width=True)
+
+    # ── Tab 4: Comparison ─────────────────────────────────────────────────────
+    with bm_tab4:
+        st.markdown("### Multi-Mode Comparison")
+        st.markdown(
+            "Side-by-side comparison of **Synthetic**, **Real-World**, and **Adversarial** "
+            "benchmark results with Generalization Gap analysis and research-ready export."
+        )
+
+        syn_data = st.session_state.get("syn_bench")
+        rw_data  = st.session_state.get("rw_bench", {})
+        adv_data = st.session_state.get("adv_bench")
+
+        # Flatten rw_bench real_world sub-dict
+        rw_inner = rw_data.get("real_world") if rw_data else None
+
+        modes_available = []
+        if syn_data:
+            modes_available.append("Synthetic")
+        if rw_inner:
+            modes_available.append("Real-World")
+        if adv_data:
+            modes_available.append("Adversarial")
+
+        if len(modes_available) < 2:
+            st.info(
+                f"Run at least 2 benchmark modes to enable comparison. "
+                f"Currently available: **{', '.join(modes_available) or 'none'}**. "
+                "Go to the Synthetic, Real-World, or Adversarial tabs and run a benchmark first."
+            )
+        else:
+            COMP_COLORS = {
+                "Synthetic":   "#58a6ff",
+                "Real-World":  "#3fb950",
+                "Adversarial": "#f85149",
+            }
+            COMP_DATA = {
+                "Synthetic":   syn_data.get("metrics", {}) if syn_data else {},
+                "Real-World":  rw_inner.get("metrics", {}) if rw_inner else {},
+                "Adversarial": adv_data.get("metrics", {}) if adv_data else {},
+            }
+            COMP_ISR = {
+                "Synthetic":   syn_data.get("isr", {}).get("isr_protected", 1.0) if syn_data else None,
+                "Real-World":  rw_inner.get("isr", {}).get("isr_protected", 1.0) if rw_inner else None,
+                "Adversarial": adv_data.get("isr", {}).get("isr_protected", 1.0) if adv_data else None,
+            }
+            COMP_PIVS = {
+                "Synthetic":   syn_data.get("pivs", {}).get("pivs", 0) if syn_data else None,
+                "Real-World":  rw_inner.get("pivs", {}).get("pivs", 0) if rw_inner else None,
+                "Adversarial": adv_data.get("pivs", {}).get("pivs", 0) if adv_data else None,
+            }
+
+            comp_metrics_list = ["accuracy","precision","recall","f1"]
+
+            # Grouped bar chart
+            st.markdown("#### Performance Across Benchmark Modes")
+            fig_comp = go.Figure()
+            for mode in modes_available:
+                md = COMP_DATA.get(mode, {})
+                fig_comp.add_trace(go.Bar(
+                    name=mode,
+                    x=[m.title() for m in comp_metrics_list],
+                    y=[md.get(m, 0) for m in comp_metrics_list],
+                    marker_color=COMP_COLORS[mode],
+                    text=[f"{md.get(m,0)*100:.1f}%" for m in comp_metrics_list],
+                    textposition="outside",
+                ))
+            fig_comp.update_layout(
+                barmode="group",
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font={"color":"#e6edf3"},
+                yaxis={"range":[0,1.18], "tickformat":".0%", "gridcolor":"#21262d"},
+                height=340, margin=dict(l=10,r=10,t=10,b=10),
+                legend={"font":{"color":"#e6edf3"}},
+            )
+            st.plotly_chart(fig_comp, use_container_width=True)
+
+            # ISR + PIVS comparison
+            st.markdown("#### ISR & PIVS Comparison")
+            isr_cols = st.columns(len(modes_available))
+            for col, mode in zip(isr_cols, modes_available):
+                isr_val  = COMP_ISR.get(mode)
+                pivs_val = COMP_PIVS.get(mode)
+                with col:
+                    mcolor    = COMP_COLORS[mode]
+                    isr_str   = f"{isr_val*100:.1f}%" if isr_val is not None else "—"
+                    pivs_str  = f"{pivs_val:.1f}" if pivs_val is not None else "—"
+                    pivs_color = ("#f85149" if pivs_val and pivs_val > 60
+                                  else "#d29922" if pivs_val and pivs_val > 30
+                                  else "#3fb950")
+                    st.markdown(
+                        f"<div style='background:rgba(0,0,0,0.3);border:1px solid {mcolor}55;"
+                        f"border-radius:12px;padding:14px;text-align:center'>"
+                        f"<div style='color:{mcolor};font-weight:700;font-size:13px'>{mode}</div>"
+                        f"<div style='margin-top:8px;font-size:11px;color:#8b949e'>ISR (Protected)</div>"
+                        f"<div style='font-size:22px;font-weight:700;color:#e6edf3'>{isr_str}</div>"
+                        f"<div style='margin-top:6px;font-size:11px;color:#8b949e'>PIVS Score</div>"
+                        f"<div style='font-size:22px;font-weight:700;color:{pivs_color}'>"
+                        f"{pivs_str}</div></div>", unsafe_allow_html=True)
+
+            # Generalization Gap
+            st.divider()
+            st.markdown("#### Generalization Gap Analysis")
+            syn_f1  = COMP_DATA.get("Synthetic",   {}).get("f1")
+            rw_f1   = COMP_DATA.get("Real-World",  {}).get("f1")
+            adv_f1  = COMP_DATA.get("Adversarial", {}).get("f1")
+
+            gap_rows = []
+            if syn_f1 and rw_f1:
+                d = syn_f1 - rw_f1
+                gap_rows.append({"Comparison": "Synthetic → Real-World",
+                                  "ΔF1": f"{d*100:+.1f}%",
+                                  "Direction": "Degraded" if d > 0.05 else "Robust" if d >= -0.05 else "Improved"})
+            if syn_f1 and adv_f1:
+                d = syn_f1 - adv_f1
+                gap_rows.append({"Comparison": "Synthetic → Adversarial",
+                                  "ΔF1": f"{d*100:+.1f}%",
+                                  "Direction": "Degraded" if d > 0.05 else "Robust" if d >= -0.05 else "Improved"})
+            if rw_f1 and adv_f1:
+                d = rw_f1 - adv_f1
+                gap_rows.append({"Comparison": "Real-World → Adversarial",
+                                  "ΔF1": f"{d*100:+.1f}%",
+                                  "Direction": "Degraded" if d > 0.05 else "Robust" if d >= -0.05 else "Improved"})
+            if gap_rows:
+                gap_df = pd.DataFrame(gap_rows)
+                st.dataframe(gap_df, use_container_width=True, hide_index=True)
+                best_mode = max(modes_available, key=lambda m: COMP_DATA.get(m,{}).get("f1",0))
+                worst_mode = min(modes_available, key=lambda m: COMP_DATA.get(m,{}).get("f1",0))
+                st.info(f"Best F1: **{best_mode}** — Worst F1 (hardest): **{worst_mode}**")
+
+            # Research export
+            st.divider()
+            st.markdown("#### Research Export")
+            comp_table_rows = [{"Mode": m, **{k.title(): f"{COMP_DATA.get(m,{}).get(k,0)*100:.1f}%"
+                                              for k in comp_metrics_list},
+                                "ISR(P)": f"{(COMP_ISR.get(m) or 0)*100:.1f}%",
+                                "PIVS":   f"{COMP_PIVS.get(m) or 0:.1f}"}
+                               for m in modes_available]
+            comp_table_df = pd.DataFrame(comp_table_rows)
+
+            exp_c1, exp_c2, exp_c3 = st.columns(3)
+            exp_c1.download_button("📥 CSV Table",
+                data=comp_table_df.to_csv(index=False),
+                file_name="aurorasoc_comparison.csv", mime="text/csv",
+                use_container_width=True)
+            exp_c2.download_button("📥 JSON Export",
+                data=json.dumps({"synthetic": syn_data, "real_world": rw_inner,
+                                 "adversarial": adv_data}, indent=2),
+                file_name="aurorasoc_benchmark_all.json", mime="application/json",
+                use_container_width=True)
+
+            # LaTeX table
+            latex_lines = [
+                r"\begin{table}[h]",
+                r"\centering",
+                r"\caption{AuroraSOC Benchmark Comparison}",
+                r"\begin{tabular}{l" + "c"*len(modes_available) + "}",
+                r"\hline",
+                "Metric & " + " & ".join(modes_available) + r" \\",
+                r"\hline",
+            ]
+            for metric in comp_metrics_list:
+                vals = [f"{COMP_DATA.get(m,{}).get(metric,0)*100:.1f}" for m in modes_available]
+                latex_lines.append(metric.title() + " & " + " & ".join(vals) + r" \\")
+            isr_vals_latex = [f"{(COMP_ISR.get(m) or 0)*100:.1f}" for m in modes_available]
+            pivs_vals_latex = [f"{COMP_PIVS.get(m) or 0:.1f}" for m in modes_available]
+            latex_lines += [
+                r"ISR$_{protected}$ & " + " & ".join(isr_vals_latex) + r" \\",
+                r"PIVS & " + " & ".join(pivs_vals_latex) + r" \\",
+                r"\hline",
+                r"\end{tabular}",
+                r"\end{table}",
+            ]
+            latex_str = "\n".join(latex_lines)
+            exp_c3.download_button("📥 LaTeX Table",
+                data=latex_str, file_name="aurorasoc_table.tex",
+                mime="text/plain", use_container_width=True)
+
+            with st.expander("📄 LaTeX Preview"):
+                st.code(latex_str, language="latex")
+
+    # ── Tab 5: ML Evaluation ─────────────────────────────────────────────────
+    with bm_tab5:
+        st.markdown("### ML Classifier vs Rule-Based Evaluation")
+        st.markdown("Evaluation metrics for the trained ML classifier and the rule-based detector.")
+
         eval_data = api_get("/evaluation")
         if "message" in eval_data:
             st.warning(eval_data["message"])
@@ -3610,35 +4433,38 @@ elif page == "📈 Benchmark & Metrics":
             rb  = eval_data.get("rule_based", {})
             comp = eval_data.get("comparison", {})
 
-            st.markdown("### ML Classifier")
-            c1,c2,c3,c4 = st.columns(4)
-            c1.metric("Accuracy",  f"{ml.get('accuracy',0):.1%}")
-            c2.metric("Precision", f"{ml.get('precision',0):.1%}")
-            c3.metric("Recall",    f"{ml.get('recall',0):.1%}")
-            c4.metric("F1",        f"{ml.get('f1',0):.1%}")
+            ev_c1, ev_c2 = st.columns(2)
+            with ev_c1:
+                st.markdown("#### ML Classifier")
+                e1,e2,e3,e4 = st.columns(4)
+                e1.metric("Accuracy",  f"{ml.get('accuracy',0):.1%}")
+                e2.metric("Precision", f"{ml.get('precision',0):.1%}")
+                e3.metric("Recall",    f"{ml.get('recall',0):.1%}")
+                e4.metric("F1",        f"{ml.get('f1',0):.1%}")
+                st.plotly_chart(_metrics_bar_chart(ml, "ML Classifier"), use_container_width=True)
 
-            st.markdown("### Rule-Based Detector")
-            c1,c2,c3,c4 = st.columns(4)
-            c1.metric("Accuracy",  f"{rb.get('accuracy',0):.1%}")
-            c2.metric("Precision", f"{rb.get('precision',0):.1%}")
-            c3.metric("Recall",    f"{rb.get('recall',0):.1%}")
-            c4.metric("F1",        f"{rb.get('f1',0):.1%}")
+            with ev_c2:
+                st.markdown("#### Rule-Based Detector")
+                f1,f2,f3,f4 = st.columns(4)
+                f1.metric("Accuracy",  f"{rb.get('accuracy',0):.1%}")
+                f2.metric("Precision", f"{rb.get('precision',0):.1%}")
+                f3.metric("Recall",    f"{rb.get('recall',0):.1%}")
+                f4.metric("F1",        f"{rb.get('f1',0):.1%}")
+                st.plotly_chart(_metrics_bar_chart(rb, "Rule-Based Detector"), use_container_width=True)
 
-            st.divider()
             if comp:
                 st.success(f"🏆 Best: **{comp.get('winner','—')}**")
 
-            # Export
-            st.markdown("### Export")
+            st.divider()
             csv_export = pd.DataFrame([
-                {"Method":"ML Classifier",  **{k: v for k, v in ml.items()}},
-                {"Method":"Rule-Based",     **{k: v for k, v in rb.items()}},
+                {"Method":"ML Classifier",   **{k: v for k, v in ml.items()}},
+                {"Method":"Rule-Based",      **{k: v for k, v in rb.items()}},
             ])
-            c1, c2 = st.columns(2)
-            c1.download_button("📥 Export CSV",
+            dl_c1, dl_c2 = st.columns(2)
+            dl_c1.download_button("📥 Export CSV",
                 data=csv_export.to_csv(index=False),
                 file_name="apids_evaluation.csv", mime="text/csv", use_container_width=True)
-            c2.download_button("📥 Export JSON",
+            dl_c2.download_button("📥 Export JSON",
                 data=json.dumps(eval_data, indent=2),
                 file_name="apids_evaluation.json", mime="application/json", use_container_width=True)
 

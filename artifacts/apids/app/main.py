@@ -1091,3 +1091,311 @@ def soc_clear_events():
     from .agents.shared_memory import EventStore
     EventStore.get().clear()
     return {"message": "SOC event store cleared."}
+
+
+# ── Cross-agent message bus ───────────────────────────────────────────────────
+
+@app.get("/api/agents/messages")
+def get_agent_messages(
+    limit:      int             = Query(50, ge=1, le=200),
+    agent:      Optional[str]   = Query(None),
+    msg_type:   Optional[str]   = Query(None, alias="type"),
+    session_id: Optional[str]   = Query(None),
+    since:      Optional[float] = Query(None),
+):
+    """Return cross-agent message bus feed."""
+    from .agents.message_bus import MessageBus
+    return {
+        "messages": MessageBus.get().get_messages(
+            limit=limit, agent=agent, msg_type=msg_type,
+            session_id=session_id, since=since,
+        )
+    }
+
+
+@app.get("/api/agents/message_stats")
+def get_agent_message_stats():
+    """Return aggregate stats from the message bus."""
+    from .agents.message_bus import MessageBus
+    return MessageBus.get().get_stats()
+
+
+@app.delete("/api/agents/messages")
+def clear_agent_messages():
+    """Clear the agent message bus."""
+    from .agents.message_bus import MessageBus
+    MessageBus.get().clear()
+    return {"message": "Message bus cleared."}
+
+
+# ── Full attack lifecycle simulation ─────────────────────────────────────────
+
+class LifecycleRequest(BaseModel):
+    category:         Optional[str]  = None
+    complexity:       str            = "high"
+    max_mutations:    int            = 4
+    session_id:       Optional[str]  = None
+
+
+@app.post("/api/lifecycle/simulate")
+def lifecycle_simulate(req: LifecycleRequest):
+    """
+    Simulate the full attack lifecycle:
+      injection → detection → bypass attempt → re-detection → SIEM logging → Elastic index
+
+    Each stage publishes to the cross-agent message bus so the dashboard can show
+    a live inter-agent communication trace.
+    """
+    import time, uuid, random
+    from .agents.message_bus import (
+        MessageBus, publish_lifecycle_event, publish_detection,
+        publish_risk_verdict, publish_alert, publish_bypass, publish_elastic_indexed,
+    )
+    from .detection.rule_based import RuleBasedDetector
+    from .detection.ml_classifier import MLClassifier
+    from .detection.semantic_similarity import SemanticSimilarityDetector
+    from .obfuscation import detect_obfuscation
+    from .adversary.generator import attack_generator, CATEGORY_WEIGHTS
+    from .adversary.mutator import PromptMutator, ALL_STRATEGIES
+    from .agents.shared_memory import EventStore, SecurityEvent
+
+    session_id = req.session_id or f"lc-{uuid.uuid4().hex[:8]}"
+    cat = req.category or random.choice(list(CATEGORY_WEIGHTS.keys()))
+
+    bus = MessageBus.get()
+    trace: List[Dict[str, Any]] = []
+    t0 = time.time()
+
+    def _add_trace(stage: str, agent: str, detail: str, extra: Dict = None):
+        entry = {
+            "stage": stage, "agent": agent, "detail": detail,
+            "elapsed": round(time.time() - t0, 3), **(extra or {})
+        }
+        trace.append(entry)
+        return entry
+
+    # ── Stage 1: Injection ────────────────────────────────────────────────────
+    attack = attack_generator.generate(category=cat, complexity=req.complexity)
+    prompt = attack.text
+    publish_lifecycle_event("injection", f"Attack generated [{cat}]", session_id, {"prompt": prompt[:80]})
+    _add_trace("injection", "adversary", f"Generated {cat} attack", {"prompt": prompt[:80]})
+
+    rb  = RuleBasedDetector()
+    ml  = MLClassifier()
+    sem = SemanticSimilarityDetector()
+
+    def _score(text: str):
+        rb_r  = rb.detect(text)
+        ml_r  = ml.predict(text)
+        sem_r = sem.compute_similarity(text)
+        obf_r = detect_obfuscation(text)
+        if ml_r.get("trained"):
+            risk = rb_r["score"]*0.32 + ml_r["score"]*0.38 + sem_r["score"]*0.20 + obf_r["obfuscation_score"]*0.10
+        else:
+            risk = rb_r["score"]*0.60 + sem_r["score"]*0.30 + obf_r["obfuscation_score"]*0.10
+        return round(min(risk, 100.0), 1)
+
+    # ── Stage 2: Detection ────────────────────────────────────────────────────
+    initial_risk = _score(prompt)
+    detected = initial_risk >= 35.0
+    bus.publish("prompt_security", "threat_correlation", "DETECTION_RESULT",
+                {"risk_score": initial_risk, "is_malicious": detected, "prompt": prompt[:80]},
+                session_id=session_id, severity="HIGH" if initial_risk > 60 else "MEDIUM")
+    _add_trace("detection", "prompt_security",
+               f"Initial risk: {initial_risk:.1f} — {'DETECTED' if detected else 'UNDETECTED'}",
+               {"risk_score": initial_risk, "detected": detected})
+
+    # ── Stage 3: Bypass attempt (if detected) ─────────────────────────────────
+    bypass_result = None
+    final_prompt = prompt
+    final_risk = initial_risk
+    bypassed = False
+    mutations_tried = 0
+
+    if detected:
+        mut = PromptMutator(seed=42)
+        strats = list(ALL_STRATEGIES)[:req.max_mutations]
+        for strat in strats:
+            mutated = mut.mutate(prompt, strat)
+            m_risk = _score(mutated)
+            mutations_tried += 1
+            bus.publish("adversary", "siem", "ADVERSARY_ATTACK",
+                        {"strategy": strat.value, "risk": m_risk, "prompt": mutated[:60]},
+                        session_id=session_id, severity="HIGH")
+            _add_trace("bypass_attempt", "adversary",
+                       f"Mutation [{strat.value}] → risk {m_risk:.1f}",
+                       {"strategy": strat.value, "risk_score": m_risk, "bypassed": m_risk < 35.0})
+            if m_risk < 35.0:
+                # Bypass succeeded
+                final_prompt  = mutated
+                final_risk    = m_risk
+                bypassed      = True
+                publish_bypass(mutated, m_risk, strat.value, session_id)
+                _add_trace("bypass_success", "adversary",
+                           f"Bypass via {strat.value}! Risk: {m_risk:.1f}",
+                           {"strategy": strat.value, "bypassed": True})
+                break
+            else:
+                final_prompt = mutated
+                final_risk   = m_risk
+    else:
+        _add_trace("bypass_skip", "adversary", "No bypass needed — initial detection missed the attack")
+
+    # ── Stage 4: Re-detection (post-bypass) ───────────────────────────────────
+    if mutations_tried > 0 and not bypassed:
+        bus.publish("prompt_security", "risk_scoring", "DETECTION_RESULT",
+                    {"risk_score": final_risk, "post_mutation": True},
+                    session_id=session_id, severity="HIGH")
+        _add_trace("re_detection", "prompt_security",
+                   f"Post-mutation risk: {final_risk:.1f} — still DETECTED",
+                   {"risk_score": final_risk, "detected": True})
+
+    # ── Stage 5: Risk verdict ─────────────────────────────────────────────────
+    verdict = "CRITICAL" if final_risk > 90 else "HIGH" if final_risk > 70 else "MEDIUM" if final_risk > 40 else "LOW"
+    action  = "BLOCK" if final_risk > 75 else "SANITIZE" if final_risk > 35 else "ALLOW"
+    publish_risk_verdict(final_risk, verdict, action, session_id)
+    bus.publish("threat_correlation", "risk_scoring", "CORRELATION_UPDATE",
+                {"campaign_detected": False, "velocity": 1},
+                session_id=session_id, severity="INFO")
+    _add_trace("risk_verdict", "risk_scoring",
+               f"Enterprise risk: {final_risk:.1f} → {verdict} → {action}",
+               {"verdict": verdict, "action": action})
+
+    # ── Stage 6: SIEM logging ─────────────────────────────────────────────────
+    if bypassed or final_risk > 50:
+        publish_alert("siem", f"[{cat}] attack {'bypassed detection' if bypassed else 'detected'}", final_risk, session_id)
+    bus.publish("forensics", "siem", "SIEM_FORWARDED",
+                {"event_logged": True, "severity": verdict},
+                session_id=session_id, severity="INFO")
+    _add_trace("siem_logging", "siem",
+               f"Event logged — severity {verdict}",
+               {"severity": verdict, "forwarded_to_elastic": True})
+
+    # ── Stage 7: Elastic indexing ─────────────────────────────────────────────
+    doc_id = f"doc-{uuid.uuid4().hex[:8]}"
+    publish_elastic_indexed(doc_id, final_risk, cat, session_id)
+    _add_trace("elastic_index", "elastic",
+               f"Indexed doc {doc_id}",
+               {"doc_id": doc_id, "index": "aurorasoc-events"})
+
+    # ── Stage 8: Forensics store ──────────────────────────────────────────────
+    ev = SecurityEvent.new(
+        agent="lifecycle_orchestrator", event_type=cat,
+        severity=verdict, prompt=final_prompt,
+        data={"attack_types": [cat], "is_malicious": not bypassed or detected,
+              "bypassed": bypassed, "mutations": mutations_tried},
+        session_id=session_id, enterprise_risk_score=final_risk,
+    )
+    EventStore.get().add(ev)
+    bus.publish("forensics", "broadcast", "FORENSICS_STORED",
+                {"event_id": ev.event_id, "total_events": len(EventStore.get().get_events())},
+                session_id=session_id, severity="INFO")
+    _add_trace("forensics_stored", "forensics",
+               f"Event {ev.event_id} stored",
+               {"event_id": ev.event_id})
+
+    elapsed = round(time.time() - t0, 3)
+    return {
+        "session_id":    session_id,
+        "category":      cat,
+        "initial_prompt": prompt[:120],
+        "final_prompt":  final_prompt[:120],
+        "initial_risk":  initial_risk,
+        "final_risk":    final_risk,
+        "detected":      detected,
+        "bypassed":      bypassed,
+        "mutations_tried": mutations_tried,
+        "verdict":       verdict,
+        "action":        action,
+        "lifecycle_stages": len(trace),
+        "trace":         trace,
+        "elapsed_sec":   elapsed,
+    }
+
+
+# ── Adversarial + Static benchmark endpoints ─────────────────────────────────
+
+class AdversarialBenchmarkRequest(BaseModel):
+    n_attacks:     int  = 50
+    n_benign:      int  = 30
+    max_mutations: int  = 4
+    complexity:    str  = "high"
+
+
+class StaticBenchmarkRequest(BaseModel):
+    n_malicious: int = 50
+    n_benign:    int = 50
+
+
+@app.post("/api/benchmark/adversarial")
+def run_adversarial_benchmark(req: AdversarialBenchmarkRequest):
+    """
+    Run the adversarial benchmark: attack prompts are generated + mutated until
+    they bypass detection. Returns ISR/PIVS/F1 alongside bypass rate metrics.
+    """
+    from .benchmark_adversarial import run_adversarial_benchmark as _bench
+    return _bench(
+        n_attacks=min(req.n_attacks, 200),
+        n_benign=min(req.n_benign, 100),
+        max_mutations=min(req.max_mutations, 8),
+        complexity=req.complexity,
+    )
+
+
+@app.post("/api/benchmark/static")
+def run_static_benchmark(req: StaticBenchmarkRequest):
+    """Run the static (curated sample) benchmark for comparison."""
+    from .benchmark_adversarial import run_static_benchmark as _bench
+    return _bench(n_malicious=req.n_malicious, n_benign=req.n_benign)
+
+
+@app.get("/api/benchmark/comparison")
+def get_benchmark_comparison():
+    """
+    Return a cached side-by-side comparison of all available benchmark modes.
+    Reads from the last saved benchmark result files.
+    """
+    import json as _json
+    results: Dict[str, Any] = {}
+    paths = {
+        "synthetic": os.path.abspath("artifacts/apids/data/benchmark_results.json"),
+        "real_world": os.path.abspath("artifacts/apids/data/realworld_results.json"),
+    }
+    for mode, path in paths.items():
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    results[mode] = _json.load(f)
+            except Exception:
+                pass
+    if not results:
+        return {"available": False, "message": "No benchmark results cached. Run a benchmark first."}
+    return {"available": True, "results": results}
+
+
+# ── JSON upload endpoint ──────────────────────────────────────────────────────
+
+@app.post("/api/upload_dataset/json")
+async def upload_dataset_json(file: UploadFile = File(...)):
+    """
+    Upload a JSON dataset file and convert it to the internal CSV format.
+
+    Accepts:
+      - Array of {prompt, label, category?} objects
+      - {data: [...]} / {train: [...]} HuggingFace-style wrapper
+    """
+    from .evaluation.realworld import save_uploaded_json
+
+    if not file.filename.endswith(".json"):
+        raise HTTPException(status_code=400, detail="Only JSON files are supported by this endpoint.")
+
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large (max 10 MB).")
+
+    ok, message = save_uploaded_json(content)
+    if not ok:
+        raise HTTPException(status_code=422, detail=message)
+
+    from .evaluation.realworld import dataset_info as _info
+    return {"message": message, "dataset": _info()}
