@@ -1341,6 +1341,107 @@ Splunk-compatible Security Information & Event Management — real-time log forw
         else:
             st.info("No events yet.")
 
+    # ── Integration Status Panel ───────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 🔗 SIEM / EDR Integrations")
+
+    integ_data   = api_get("/siem/integrations")
+    integ_list   = integ_data.get("integrations", [])
+    integ_summary = integ_data.get("summary", {})
+
+    if integ_summary:
+        is1, is2, is3, is4 = st.columns(4)
+        is1.metric("Total Integrations",  integ_summary.get("total", 0))
+        is2.metric("Live / Configured",   integ_summary.get("configured", 0))
+        is3.metric("Simulation Mode",     integ_summary.get("simulation", 0))
+        is4.metric("Events Forwarded",    integ_summary.get("total_forwarded", 0))
+
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+    if integ_list:
+        mode_color  = {"LIVE": "#3fb950", "SIMULATION": "#58a6ff", "ERROR": "#f85149", "PENDING": "#d29922"}
+        mode_icon   = {"LIVE": "🟢", "SIMULATION": "🔵", "ERROR": "🔴", "PENDING": "🟡"}
+
+        cols = st.columns(4)
+        for idx, integ in enumerate(integ_list):
+            col     = cols[idx % 4]
+            mode    = integ.get("mode", "SIMULATION")
+            icolor  = integ.get("color", "#58a6ff")
+            ic      = mode_color.get(mode, "#8b949e")
+            im      = mode_icon.get(mode, "⚪")
+            col.markdown(
+                f"<div style='background:#161b22;border:1px solid {icolor}33;"
+                f"border-top:3px solid {icolor};border-radius:10px;padding:14px 16px;margin-bottom:12px'>"
+                f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px'>"
+                f"<span style='font-size:18px'>{integ.get('icon','🔌')}</span>"
+                f"<span style='font-size:10px;font-weight:700;color:{ic};background:{ic}22;"
+                f"padding:2px 7px;border-radius:8px'>{im} {mode}</span>"
+                f"</div>"
+                f"<div style='font-weight:700;color:#e6edf3;font-size:13px'>{integ.get('display_name','')}</div>"
+                f"<div style='color:#8b949e;font-size:10px;margin-top:2px'>{integ.get('vendor','')} · {integ.get('category','')}</div>"
+                f"<div style='color:#8b949e;font-size:10px;margin-top:6px'>"
+                f"Format: <span style='color:#c9d1d9'>{integ.get('format','')}</span></div>"
+                f"<div style='color:#8b949e;font-size:10px;margin-top:2px'>"
+                f"Forwarded: <span style='color:{icolor};font-weight:700'>{integ.get('forwarded',0)}</span></div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+    # Integration detail expander
+    with st.expander("Integration Details & Native Format Previews"):
+        if integ_list:
+            sel_name = st.selectbox(
+                "Select integration",
+                [i["name"] for i in integ_list],
+                format_func=lambda n: next(
+                    (f"{i['icon']} {i['display_name']}" for i in integ_list if i["name"] == n), n
+                ),
+                key="integ_detail_sel",
+            )
+            detail = api_get(f"/siem/integrations/{sel_name}?limit=1")
+            sel_status = detail.get("status", {})
+            native_ev  = detail.get("native_preview", {})
+
+            dc1, dc2 = st.columns(2)
+            with dc1:
+                st.markdown(f"**Mode:** {sel_status.get('mode','—')}  ")
+                st.markdown(f"**Format:** {sel_status.get('format','—')}  ")
+                st.markdown(f"**Forwarded:** {sel_status.get('forwarded',0)} events  ")
+                if sel_status.get("last_error"):
+                    st.error(f"Last error: {sel_status['last_error']}")
+                env_vars = sel_status.get("env_vars", [])
+                if env_vars:
+                    st.markdown("**Required env vars to go live:**")
+                    for ev in env_vars:
+                        st.code(ev, language=None)
+            with dc2:
+                if native_ev:
+                    import json as _json
+                    st.markdown("**Latest native event (forwarded format):**")
+                    st.code(_json.dumps(native_ev, indent=2, default=str)[:1500], language="json")
+                else:
+                    st.info("No events forwarded yet. Analyze a prompt to generate one.")
+
+    # Configuration guide expander
+    with st.expander("How to configure live integrations"):
+        st.markdown("""
+Set these environment variables to switch any integration from **simulation** to **live** mode.
+All events will be forwarded in real time to configured endpoints.
+
+| Integration | Required Env Vars |
+|---|---|
+| 🐾 Wazuh | `WAZUH_HOST`, `WAZUH_TOKEN` |
+| 🦅 CrowdStrike Falcon | `CROWDSTRIKE_CLIENT_ID`, `CROWDSTRIKE_CLIENT_SECRET` |
+| 🔍 Elastic SIEM | `ELASTIC_HOST`, `ELASTIC_API_KEY`, `ELASTIC_INDEX` (optional) |
+| ☁️ Microsoft Sentinel | `SENTINEL_WORKSPACE_ID`, `SENTINEL_PRIMARY_KEY` |
+| 🔷 IBM QRadar | `QRADAR_HOST`, `QRADAR_TOKEN` |
+| 🔥 Palo Alto XSOAR | `XSOAR_HOST`, `XSOAR_API_KEY` |
+| 🌐 Google Chronicle | `CHRONICLE_CUSTOMER_ID`, `CHRONICLE_SERVICE_ACCOUNT_JSON` |
+
+Once configured, every `/api/analyze_prompt` and `/api/mitigate` call auto-forwards
+to all live integrations in their native event format.
+""")
+
     # ── HEC Simulation info ───────────────────────────────────────────────────
     with st.expander("Splunk HEC Endpoint Info"):
         st.markdown("""
