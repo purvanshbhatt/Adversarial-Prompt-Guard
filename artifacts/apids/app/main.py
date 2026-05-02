@@ -32,6 +32,9 @@ from .siem.hec import siem_store, format_hec_event
 from .siem.alerting import alert_engine
 from .siem.mitre import map_attack_types, get_all_ttps
 from .siem.integrations.manager import integration_manager
+from .elastic.store import elastic_store
+from .elastic.rules import rules_engine
+from .elastic.hunting import execute_hunt, PREDEFINED_HUNTS, FIELD_DESCRIPTIONS, suggest_queries
 
 app = FastAPI(
     title="AuroraSOC — Multi-Agent AI Security Platform",
@@ -208,6 +211,8 @@ def analyze_prompt(request: PromptRequest):
         "obf_score":     result["obfuscation_score"],
     })
     siem_store.ingest_detection(request.prompt, result, action="DETECT")
+    doc = elastic_store.index_detection(request.prompt, result, action="DETECT")
+    rules_engine.evaluate(doc)
     return result
 
 
@@ -242,6 +247,8 @@ def mitigate_prompt(request: MitigateRequest):
     pct_reduction  = round(char_reduction / max(len(request.prompt), 1) * 100, 1)
 
     siem_store.ingest_detection(request.prompt, detection, action=action)
+    doc = elastic_store.index_detection(request.prompt, detection, action=action)
+    rules_engine.evaluate(doc)
 
     return {
         "original":          request.prompt,
@@ -381,6 +388,102 @@ def siem_integration_test(name: str):
         "forwarded": status.get("forwarded", 0),
     }
 
+
+# ── Elastic Pipeline Endpoints ──────────────────────────────────────────────
+
+@app.get("/api/elastic/stats")
+def elastic_stats(hours: float = Query(24)):
+    return {
+        "store":  elastic_store.get_stats(since_hours=hours),
+        "rules":  rules_engine.get_stats(),
+    }
+
+@app.get("/api/elastic/logs")
+def elastic_logs(
+    q:           str   = Query(None),
+    size:        int   = Query(50, ge=1, le=500),
+    min_risk:    float = Query(None),
+    since_hours: float = Query(24),
+    event_type:  str   = Query(None),
+    attack_cat:  str   = Query(None),
+    severity:    str   = Query(None),
+    obf_type:    str   = Query(None),
+):
+    filters = {}
+    if event_type:  filters["event_type"]       = event_type
+    if attack_cat:  filters["attack_category"]   = attack_cat
+    if severity:    filters["event_severity"]    = severity
+    if obf_type:    filters["obfuscation_type"]  = obf_type
+    docs = elastic_store.search(q=q, filters=filters, size=size,
+                                min_risk=min_risk, since_hours=since_hours)
+    return {"hits": docs, "total": len(docs)}
+
+@app.get("/api/elastic/timeline")
+def elastic_timeline(
+    hours:          float = Query(24),
+    bucket_minutes: int   = Query(30),
+    event_type:     str   = Query(None),
+    attack_cat:     str   = Query(None),
+):
+    filters = {}
+    if event_type: filters["event_type"]     = event_type
+    if attack_cat: filters["attack_category"] = attack_cat
+    return {"buckets": elastic_store.get_timeline(hours=hours, bucket_minutes=bucket_minutes, filters=filters)}
+
+@app.get("/api/elastic/aggregations")
+def elastic_aggregations(
+    field: str   = Query("attack_category"),
+    size:  int   = Query(10, ge=1, le=50),
+    hours: float = Query(24),
+):
+    return {
+        "field":   field,
+        "buckets": elastic_store.aggregate(field=field, size=size, since_hours=hours),
+    }
+
+@app.post("/api/elastic/search")
+def elastic_search(payload: dict):
+    """
+    Threat hunting search.
+    Body: { "query": "jailbreak", "since_hours": 24, "size": 100, "min_risk": null }
+    """
+    q           = payload.get("query", "")
+    since_hours = float(payload.get("since_hours", 24))
+    size        = int(payload.get("size", 100))
+    min_risk    = payload.get("min_risk")
+    docs, meta  = execute_hunt(q, elastic_store, since_hours=since_hours, size=size, min_risk=min_risk)
+    return {"hits": docs, "meta": meta}
+
+@app.get("/api/elastic/rules")
+def elastic_rules():
+    return {
+        "rules":  rules_engine.get_rules_status(),
+        "stats":  rules_engine.get_stats(),
+        "alerts": rules_engine.get_alerts(limit=20, active_only=False),
+    }
+
+@app.get("/api/elastic/rules/alerts")
+def elastic_rule_alerts(limit: int = Query(50), active_only: bool = Query(False)):
+    return {
+        "alerts": rules_engine.get_alerts(limit=limit, active_only=active_only),
+        "stats":  rules_engine.get_stats(),
+    }
+
+@app.post("/api/elastic/rules/alerts/{alert_id}/dismiss")
+def elastic_dismiss_alert(alert_id: str):
+    ok = rules_engine.dismiss(alert_id)
+    return {"dismissed": ok, "alert_id": alert_id}
+
+@app.get("/api/elastic/hunting/presets")
+def elastic_hunting_presets():
+    return {
+        "presets": PREDEFINED_HUNTS,
+        "fields":  FIELD_DESCRIPTIONS,
+    }
+
+@app.get("/api/elastic/hunting/suggest")
+def elastic_suggest(q: str = Query("")):
+    return {"suggestions": suggest_queries(q)}
 
 @app.post("/api/train_model")
 def train_model(request: TrainingRequest):
